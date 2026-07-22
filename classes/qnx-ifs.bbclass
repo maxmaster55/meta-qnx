@@ -164,9 +164,9 @@ python do_generate_buildfile() {
                     "qnx-sdp?" % (d.getVar('PN'), pn))
 
     with open(template) as f:
-        content = f.read()
+        raw = f.read()
 
-    if '@QNX_IFS_FILES@' not in content:
+    if '@QNX_IFS_FILES@' not in raw:
         bb.fatal("%s contains no @QNX_IFS_FILES@ marker, so installed recipes "
                  "have nowhere to go" % template)
 
@@ -199,21 +199,10 @@ python do_generate_buildfile() {
                   for cmd in toybox_cmds]
         files = files + '\n'.join(lines) + '\n'
 
-    generated = {
+    content = qnx_expand_template(d, template, {
         'QNX_IFS_FILES': files,
         'QNX_IFS_STARTUP': startup,
-    }
-
-    def expand(match):
-        name = match.group(1)
-        if name in generated:
-            return generated[name]
-        value = d.getVar(name)
-        if value is None:
-            bb.fatal("%s references @%s@, which is not set" % (template, name))
-        return value
-
-    content = re.sub(r'@([A-Z][A-Z0-9_]*)@', expand, content)
+    })
 
     buildfile = d.getVar('QNX_IFS_BUILDFILE')
     bb.utils.mkdirhier(os.path.dirname(buildfile))

@@ -289,6 +289,53 @@ QNX_IFS_SEARCHABLE_DIRS ?= "bin sbin lib usr/bin usr/sbin usr/lib lib/dll boot/s
 QNX_IFS_EXCLUDE_DIRS ?= "usr/include include"
 QNX_IFS_EXCLUDE_SUFFIXES ?= ".a .la .pc .h .hpp"
 
+def qnx_expand_template(d, template, generated=None):
+    """Expand @VARIABLE@ markers in a template against the datastore.
+
+    Shared by the IFS and disk-image classes. bitbake's own ${...} syntax is
+    deliberately not used: QNX build files use ${...} for their own variables
+    (${PROCESSOR}, ${QNX_TARGET}), and expanding those would corrupt them.
+
+    `generated` supplies values computed at task time, which take precedence."""
+    import re
+    import os
+
+    if not os.path.isfile(template):
+        bb.fatal("template not found: %s" % template)
+
+    generated = generated or {}
+
+    with open(template) as f:
+        content = f.read()
+
+    def expand(match):
+        name = match.group(1)
+        if name in generated:
+            return generated[name]
+        value = d.getVar(name)
+        if value is None:
+            bb.fatal("%s references @%s@, which is not set" % (template, name))
+        return value
+
+    return re.sub(r'@([A-Z][A-Z0-9_]*)@', expand, content)
+
+
+def qnx_parse_size(text, what='size'):
+    """Accept 1234, 16K, 200M, 2G (also KiB-style suffixes) and return bytes."""
+    text = (text or '').strip()
+    units = {'': 1, 'K': 1024, 'M': 1024 ** 2, 'G': 1024 ** 3, 'T': 1024 ** 4}
+    suffix = text[-1:].upper()
+    if suffix in units and suffix != '':
+        number, factor = text[:-1], units[suffix]
+    else:
+        number, factor = text, 1
+    try:
+        return int(float(number) * factor)
+    except ValueError:
+        bb.fatal("cannot parse %s '%s' -- expected a number with an optional "
+                 "K/M/G suffix, or 'auto'" % (what, text))
+
+
 def qnx_ifs_flags(d, varname):
     """Varflags of varname, minus bitbake's own bookkeeping.
 
