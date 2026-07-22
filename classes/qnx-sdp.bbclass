@@ -122,8 +122,40 @@ QNX_STAGE_DIR = "/qnx-stage"
 QNX_STAGE_BINDIR = "${QNX_STAGE_DIR}/${QNX_PROCESSOR}/bin"
 QNX_STAGE_SBINDIR = "${QNX_STAGE_DIR}/${QNX_PROCESSOR}/sbin"
 QNX_STAGE_LIBDIR = "${QNX_STAGE_DIR}/${QNX_PROCESSOR}/lib"
+QNX_STAGE_USRLIBDIR = "${QNX_STAGE_DIR}/${QNX_PROCESSOR}/usr/lib"
+QNX_STAGE_INCLUDEDIR = "${QNX_STAGE_DIR}/usr/include"
 
 SYSROOT_DIRS += "${QNX_STAGE_DIR}"
+
+# ---------------------------------------------------------------------------
+# The stage tree is also the sysroot
+# ---------------------------------------------------------------------------
+# One tree serves both roles, because $QNX_TARGET's layout happens to suit both:
+# `mkifs -r` wants ${PROCESSOR}/{bin,sbin,lib}, and a compiler wants
+# usr/include + ${PROCESSOR}/lib. The QNX hypervisor project's hand-built trees
+# already work this way -- qnx_guests/install/ holds usr/include/ and
+# aarch64le/sbin/ side by side -- so there is nothing to invent and existing
+# install rules keep working. rpi-gpio's CMakeLists, for instance, already
+# installs to ${CMAKE_SYSTEM_PROCESSOR}/sbin and usr/include/sys.
+#
+# This is what turns "app B needs app A's library and headers" into a plain
+# DEPENDS, which is the thing the makefile build cannot express: see the
+# ORDERED_DIRS comment in src/Makefile, where someip has to be built before
+# motor_ai_* by hand because they link against libraries it produces.
+QNX_SYSROOT_CPPFLAGS ?= "-I${RECIPE_SYSROOT}${QNX_STAGE_INCLUDEDIR}"
+QNX_SYSROOT_LDFLAGS ?= "-L${RECIPE_SYSROOT}${QNX_STAGE_LIBDIR} \
+                        -L${RECIPE_SYSROOT}${QNX_STAGE_USRLIBDIR}"
+
+CFLAGS:append = " ${QNX_SYSROOT_CPPFLAGS}"
+CXXFLAGS:append = " ${QNX_SYSROOT_CPPFLAGS}"
+LDFLAGS:append = " ${QNX_SYSROOT_LDFLAGS}"
+
+# RECIPE_SYSROOT is a per-recipe absolute path; including it verbatim in the
+# task hash would make every recipe's signature depend on its own build
+# location. OE excludes it from the standard flags for the same reason.
+CFLAGS[vardepsexclude] += "QNX_SYSROOT_CPPFLAGS"
+CXXFLAGS[vardepsexclude] += "QNX_SYSROOT_CPPFLAGS"
+LDFLAGS[vardepsexclude] += "QNX_SYSROOT_LDFLAGS"
 
 # The staged files are QNX aarch64 ELFs. Yocto's aarch64-poky-linux-strip has no
 # business touching them.
@@ -181,25 +213,53 @@ QNX_IFS_EXTRA_ENTRIES ?= ""
 # files installed into them can be referenced by bare name.
 QNX_IFS_SEARCHABLE_DIRS ?= "bin sbin lib usr/bin usr/sbin usr/lib lib/dll boot/sys"
 
+# Staged content that belongs to the sysroot rather than to any image. Headers
+# and static libraries are build inputs for other recipes; putting them in an
+# IFS would only waste RAM. Excluded silently -- unlike an unexpected location,
+# this is not a mistake worth warning about.
+QNX_IFS_EXCLUDE_DIRS ?= "usr/include include"
+QNX_IFS_EXCLUDE_SUFFIXES ?= ".a .la .pc .h .hpp"
+
 python qnx_sdp_write_ifs_dropin() {
     import os
 
-    dest = d.getVar('D')
+    destdir = d.getVar('D')
     proc = d.getVar('QNX_PROCESSOR')
-    stage_root = os.path.join(dest + d.getVar('QNX_STAGE_DIR'), proc)
+    stage_root = os.path.join(destdir + d.getVar('QNX_STAGE_DIR'), proc)
     pn = d.getVar('PN')
 
     entries = []
 
     if d.getVar('QNX_IFS_AUTO_ENTRIES') == '1' and os.path.isdir(stage_root):
         searchable = (d.getVar('QNX_IFS_SEARCHABLE_DIRS') or '').split()
+        excluded = (d.getVar('QNX_IFS_EXCLUDE_DIRS') or '').split()
+        excl_suffix = tuple((d.getVar('QNX_IFS_EXCLUDE_SUFFIXES') or '').split())
+
         for dirpath, _, filenames in os.walk(stage_root):
             reldir = os.path.relpath(dirpath, stage_root)
             reldir = '' if reldir == '.' else reldir
+
+            # Build inputs for other recipes, not image content.
+            if any(reldir == x or reldir.startswith(x + '/') for x in excluded):
+                continue
+
             for name in sorted(filenames):
-                if reldir in searchable:
+                if name.endswith(excl_suffix):
+                    continue
+
+                ifs_dest = '/%s/%s' % (reldir, name)
+                full = os.path.join(dirpath, name)
+
+                if os.path.islink(full):
+                    # Versioned shared libraries stage as a chain --
+                    # libfoo.so -> libfoo.so.1 -> libfoo.so.1.2.3. Emitting a
+                    # symlink as a plain entry would silently duplicate the
+                    # payload once per name.
+                    entries.append('[type=link] %s=%s'
+                                   % (ifs_dest, os.readlink(full)))
+                elif reldir in searchable:
                     # e.g. aarch64le/bin/qnx-hello  ->  /bin/qnx-hello=qnx-hello
-                    entries.append('/%s/%s=%s' % (reldir, name, name))
+                    entries.append('%s=%s' % (ifs_dest, name))
                 else:
                     bb.warn("%s: %s/%s is outside the mkifs search path (%s). "
                             "It will not be added to images automatically; add an "
@@ -209,7 +269,7 @@ python qnx_sdp_write_ifs_dropin() {
     extra = (d.getVar('QNX_IFS_EXTRA_ENTRIES') or '').strip()
 
     if entries or extra:
-        dropin_dir = dest + d.getVar('QNX_IFS_DROPIN_DIR')
+        dropin_dir = destdir + d.getVar('QNX_IFS_DROPIN_DIR')
         bb.utils.mkdirhier(dropin_dir)
         with open(os.path.join(dropin_dir, pn + '.files'), 'w') as f:
             f.write('### %s\n' % pn)
@@ -220,7 +280,7 @@ python qnx_sdp_write_ifs_dropin() {
 
     startup = (d.getVar('QNX_IFS_STARTUP_CMD') or '').strip()
     if startup:
-        dropin_dir = dest + d.getVar('QNX_IFS_DROPIN_DIR')
+        dropin_dir = destdir + d.getVar('QNX_IFS_DROPIN_DIR')
         bb.utils.mkdirhier(dropin_dir)
         with open(os.path.join(dropin_dir, pn + '.startup'), 'w') as f:
             f.write('### %s\n' % pn)

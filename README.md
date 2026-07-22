@@ -3,9 +3,10 @@
 A Yocto layer that builds **QNX** artifacts — QNX binaries with `qcc`, and bootable
 QNX image filesystems (IFS) with `mkifs` — using bitbake as the build orchestrator.
 
-Status: **proof of concept.** It builds two example applications with `qcc` and assembles
-them into a minimal bootable aarch64le guest IFS, with the mkifs build file generated from
-the recipe list rather than maintained by hand.
+Status: **working proof of concept.** It builds four applications with `qcc` — two toy
+examples and two ported from the QNX hypervisor project's makefile build, one make-based
+and one CMake-based — and assembles them into a minimal bootable aarch64le guest IFS. The
+mkifs build file is generated from the recipe list rather than maintained by hand.
 
 ## Can Yocto really build QNX?
 
@@ -126,9 +127,13 @@ The IFS is a drop-in for a QNX hypervisor guest: it expects a `virtio-console` v
 | --- | --- |
 | `classes/qnx-sdp.bbclass` | Points `CC`/`CXX`/… at `qcc`/`q++`, exports the SDP env, disables Yocto's toolchain and packaging, defines the staging contract. |
 | `classes/qnx-ifs.bbclass` | Expands `QNX_IFS_INSTALL` into a generated `.build` file, runs `mkifs`, deploys the `.ifs` (+ `.sym` files). |
+| `classes/qnx-cmake.bbclass` | CMake projects: generates a QNX toolchain file, drives configure/build/install. |
+| `classes/qnx-project-src.bbclass` | Builds an application working tree in place via `externalsrc`. |
 | `conf/machine/qnx-aarch64le.conf` | Thin machine: no kernel, no bootloader, no rootfs. |
 | `recipes-example/qnx-hello/` | Hello-world C program built with `qcc`. |
 | `recipes-example/qnx-sysinfo/` | Second app, existing to show that adding one costs one word. |
+| `recipes-apps/shm-chunker/` | Real app from `src/shm_sender` (plain make). |
+| `recipes-apps/rpi-gpio/` | Real app from `src/rpi-gpio` (CMake, ships a public header). |
 | `recipes-image/qnx-ifs-hello/` | Minimal bootable IFS, plus the `.build.in` template. |
 
 ### The staging contract
@@ -136,8 +141,9 @@ The IFS is a drop-in for a QNX hypervisor guest: it expects a `virtio-console` v
 Recipes install target files under `${D}${QNX_STAGE_DIR}`, laid out to mirror
 `$QNX_TARGET`:
 
-```
-${QNX_STAGE_DIR}/aarch64le/{bin,sbin,lib}/...
+```text
+${QNX_STAGE_DIR}/aarch64le/{bin,sbin,lib}/...   # runtime: image + link
+${QNX_STAGE_DIR}/usr/include/...                # headers: sysroot only
 ```
 
 That layout is not arbitrary — it is what `mkifs -r <root>` expects, and it matches the
@@ -145,11 +151,71 @@ hand-built `install/` trees in an existing QNX BSP (`install/aarch64le/sbin/...`
 the convention means existing `.build` files remain reusable verbatim. `SYSROOT_DIRS` makes
 the tree flow into a dependent recipe's `RECIPE_SYSROOT` through a plain `DEPENDS`.
 
+**One tree serves two roles.** The same layout that `mkifs -r` wants is also what a
+compiler wants, so the stage tree doubles as the sysroot: `qnx-sdp.bbclass` adds
+`-I<sysroot>/usr/include` and `-L<sysroot>/aarch64le/lib` to every recipe's flags. That is
+what turns "app B needs app A's library and headers" into a plain `DEPENDS` — the thing a
+makefile build cannot express, and the reason `src/Makefile` has to hand-order `someip`
+before `motor_ai_*`.
+
+Routing between the two roles is automatic:
+
+| Staged path | Goes to |
+| --- | --- |
+| `aarch64le/{bin,sbin,lib,usr/*}` | image **and** sysroot |
+| `usr/include/...`, `*.a`, `*.pc` | sysroot only — never wastes IFS RAM |
+| symlinks | emitted as `[type=link]`, so a versioned `.so` chain is not duplicated |
+
+Anything staged outside the mkifs search path warns rather than vanishing quietly.
+
+## Building applications
+
+| Class | For |
+| --- | --- |
+| `qnx-sdp` | plain recipes; `oe_runmake` and hand-written compile steps |
+| `qnx-cmake` | CMake projects; generates a QNX toolchain file whose `CMAKE_FIND_ROOT_PATH` covers both the SDP and the recipe sysroot |
+| `qnx-project-src` | builds a working tree in place via `externalsrc` |
+
+`qnx-cmake` is deliberately **not** built on OE's `cmake.bbclass`, which assumes Yocto's
+cross-toolchain, sysroot layout and a native cmake recipe — all of which `qnx-sdp`
+switches off. Driving cmake directly is less work than unpicking those assumptions. It
+uses the host's `cmake`/`ninja` (added to `HOSTTOOLS` in `conf/layer.conf`).
+
+`qnx-project-src` exists because the applications live in a separate, actively edited
+repository, several as branch-tracking submodules. A recipe with a pinned `SRCREV` would
+mean committing to see a change — exactly the friction that sends people back to running
+`make` by hand. Point it at a checkout:
+
+```bitbake
+QNX_PROJECT_SRC = "/path/to/Qnx_Hypervisor_rbye"
+```
+
+Trade-off: `externalsrc` disables sstate for those recipes, so `do_compile` runs every
+time. That is the right default while porting; a recipe that has stabilised can move to a
+real `SRC_URI` with a pinned revision.
+
+Two real applications are ported as worked examples:
+
+- **`shm-chunker`** (`src/shm_sender`, plain make) — its Makefile already cross-compiles
+  correctly, so the recipe drives it as-is. `EXTRA_OEMAKE` passes `CC`/`CXX` on the command
+  line to override the makefile's own assignment. `CFLAGS` is deliberately not passed: the
+  makefile uses simple assignment, so overriding it would drop its `-std` and `-V` flags.
+- **`rpi-gpio`** (`src/rpi-gpio`, CMake) — the recipe contains **no install code at all**.
+  The project's own `install()` rules already target `${CMAKE_SYSTEM_PROCESSOR}/sbin` and
+  `usr/include/sys`, which with the prefix set to the stage tree lands the binary in the
+  image and the public header in the sysroot only.
+
 ## Not done yet
 
 1. A `qnx-sdp-native` recipe wrapping `qnxsoftwarecenter_clt -importAndInstall`, so the SDP
    itself is provisioned by bitbake instead of by hand.
-2. Recipes for real applications. Most QNX app trees already have makefiles or CMake, so a
-   `qnx-sdp`-inheriting recipe with `oe_runmake` is largely mechanical.
-3. `mkqnx6fsimg` / `mkfatfsimg` / `diskimage` support, to produce a full bootable
-   `disk.img` (FAT boot partition + QNX6 data partition) rather than just an IFS.
+2. A meson class, for the GPU dependencies (`libepoxy`, `virglrenderer`) — `src/qnx-aarch64le.ini`
+   is already a meson cross file and can be templated the way `qnx-cmake` templates its toolchain file.
+3. Routing image content to a QNX6 data partition (`mkqnx6fsimg`) rather than the IFS.
+   An IFS is RAM-resident, which is why `guest-1` already carries a separate `rootfs.img`.
+4. The SDP version is not in the task hash, only its path -- upgrading the SDP in place will
+   not trigger rebuilds.
+5. A QA check that staged binaries really are QNX aarch64 ELFs, to catch a recipe whose
+   build system ignored `${CC}` and used the host compiler.
+6. `mkfatfsimg` / `diskimage` support, to produce a full bootable `disk.img`
+   (FAT boot partition + QNX6 data partition) rather than just an IFS.

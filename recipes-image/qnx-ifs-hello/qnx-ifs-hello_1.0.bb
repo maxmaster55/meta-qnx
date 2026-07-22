@@ -12,7 +12,7 @@ inherit qnx-ifs
 
 # The only line that changes when an application is added to the image.
 # Analogous to IMAGE_INSTALL on Linux.
-QNX_IFS_INSTALL = "qnx-hello qnx-sysinfo"
+QNX_IFS_INSTALL = "qnx-hello qnx-sysinfo shm-chunker rpi-gpio"
 
 # scarthgap has no UNPACKDIR, so file:// sources land directly in WORKDIR.
 S = "${WORKDIR}"
