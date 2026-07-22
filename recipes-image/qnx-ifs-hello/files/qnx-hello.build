@@ -1,0 +1,74 @@
+################################################################################
+## Minimal QNX IFS -- proof that bitbake can drive mkifs.
+##
+## Modelled on qnx_guests/images/guest-2/qnx800-guest-2.build from the QNX
+## hypervisor project, but stripped to the bone: no m4 includes, no networking,
+## no ssh/qconn, no block or watchdog drivers. Just a console, our Yocto-built
+## hello binary, and a shell so the guest stays alive.
+##
+## Everything unqualified (startup-armv8_fm, procnto-smp-instr, ksh, devc-virtio,
+## libc.so) is resolved by mkifs out of $QNX_TARGET. qnx-hello is resolved the
+## same way, out of the stage tree passed as `mkifs -r` -- which is why that tree
+## mirrors $QNX_TARGET's layout (aarch64le/bin/...).
+################################################################################
+
+[-optional]
+[+keeplinked]
+[image=0x80000000]
+
+[virtual=aarch64le,elf] boot = {
+    startup-armv8_fm -H
+    PATH=/proc/boot:/bin:/usr/bin:/sbin:/usr/sbin LD_LIBRARY_PATH=/proc/boot:/lib:/usr/lib:/lib/dll procnto-smp-instr -v
+}
+
+[+script] startup-script = {
+    SYSNAME=nto
+    TERM=qansi
+
+    procmgr_symlink ../../proc/boot/ldqnx-64.so.2 /usr/lib/ldqnx-64.so.2
+
+    # Needed for ksh to run anything below
+    pipe
+    slogger2
+
+    # virtio-console. Must match the guest's qvmconf:
+    #   vdev virtio-console / loc 0x20000000 / intr gic:42
+    devc-virtio 0x20000000,42
+    waitfor /dev/vcon1 4
+    reopen /dev/vcon1
+
+    display_msg " "
+    display_msg "Running qnx-hello (built by bitbake with qcc) ..."
+    qnx-hello
+
+    display_msg "Starting shell ..."
+    [+session] ksh &
+}
+
+[uid=0 gid=0]
+
+[type=link] /bin/sh=/bin/ksh
+[type=link] /tmp=/dev/shmem
+[type=link] /dev/console=/dev/vcon1
+
+################################################################################
+## The whole point: a binary compiled by a Yocto recipe.
+## Found via `mkifs -r <stage>` as <stage>/aarch64le/bin/qnx-hello.
+################################################################################
+/proc/boot/qnx-hello=qnx-hello
+
+################################################################################
+## Console driver + a few utilities for poking around interactively.
+## mkifs pulls in each binary's shared library dependencies automatically.
+##
+## Keep this list to binaries the SDP actually ships: this install has no
+## standalone ls/cat/uname (QNX 8 leans on ksh builtins), and mkifs fails hard
+## with "Host file 'x' not available" rather than skipping a missing one.
+## Check with: ls $QNX_TARGET/aarch64le/bin
+################################################################################
+/sbin/devc-virtio=devc-virtio
+
+/bin/ksh=ksh
+/bin/pidin=pidin
+/bin/waitfor=waitfor
+/bin/slay=slay
