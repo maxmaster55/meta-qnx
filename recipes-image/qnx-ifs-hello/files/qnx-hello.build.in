@@ -75,10 +75,9 @@
 ## Base system: console driver and a few utilities for poking around.
 ## mkifs pulls in each binary's shared library dependencies automatically.
 ##
-## Keep this list to binaries the SDP actually ships: this install has no
-## standalone ls/cat/uname (QNX 8 leans on ksh builtins), and mkifs fails hard
-## with "Host file 'x' not available" rather than skipping a missing one.
-## Check with: ls $QNX_TARGET/aarch64le/bin
+## ls, cat, uname and friends are not listed here: QNX 8 has no standalone
+## versions of them. They come from toybox, which qnx-ifs.bbclass adds to the
+## generated section above along with a link per command.
 ################################################################################
 /sbin/devc-virtio=devc-virtio
 

@@ -112,6 +112,25 @@ qnx-hello
 qnx-sysinfo
 ```
 
+### toybox
+
+QNX 8 ships **no standalone `ls`, `cat`, `cp`, `uname` or `grep`** — there is nothing at
+`$QNX_TARGET/${PROCESSOR}/bin` called any of those. They all come from `toybox`, a single
+multicall binary that dispatches on `argv[0]`. A build file naming `ls` therefore fails
+with the unhelpful `Host file 'ls' not available` and a line number.
+
+Images get it automatically: the binary once, plus a `[type=link]` per command, as the
+SDP's own toybox documentation prescribes. 62 commands cost one ~380 KB binary.
+
+```bitbake
+QNX_IFS_TOYBOX_CMDS = ""            # opt out entirely
+QNX_IFS_TOYBOX_CMDS += "vi bc"      # or extend the default set
+```
+
+Note the links use an absolute target (`/bin/ls -> /usr/bin/toybox`). The SDP docs show a
+bare `=toybox`, but a symlink target without a leading slash resolves relative to the
+link's own directory, so `/bin/ls` would look for a non-existent `/bin/toybox`.
+
 Escape hatches, for recipes the automatic pass cannot describe:
 
 - `QNX_IFS_EXTRA_ENTRIES` — raw mkifs lines for permissions, uid/gid, symlinks, inline
