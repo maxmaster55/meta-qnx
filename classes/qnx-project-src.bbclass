@@ -28,6 +28,13 @@ QNX_APP_SUBDIR ??= ""
 EXTERNALSRC = "${QNX_PROJECT_SRC}/${QNX_APP_SUBDIR}"
 EXTERNALSRC_BUILD ?= "${EXTERNALSRC}/build"
 
+# externalsrc drops oe-workdir/oe-logs symlinks into the source directory by
+# default. That is someone else's git repository: it tries to hide them via
+# .git/info/exclude, but the result is still untracked clutter appearing in a
+# tree the build has no business modifying. The logs are reachable from
+# tmp/work regardless.
+EXTERNALSRC_SYMLINKS = ""
+
 python () {
     src = d.getVar('QNX_PROJECT_SRC')
     sub = d.getVar('QNX_APP_SUBDIR')
