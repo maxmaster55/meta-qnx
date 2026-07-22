@@ -68,6 +68,13 @@ QNX_DISK_DATA_MIN ?= "64M"
 
 # QNX6 format-time parameters. Inodes are preallocated, so this is a ceiling on
 # the number of files the partition can ever hold.
+# Extra records for the data partition, available to its template as
+# @QNX_DISK_DATA_EXTRA@. This is how a layer adds content to a disk defined
+# elsewhere -- a guest layer appending its own image, say -- without the disk
+# recipe having to know about it, and without a dependency pointing the wrong
+# way between layers.
+QNX_DISK_DATA_EXTRA ?= ""
+
 QNX_DISK_DATA_INODES ?= "50000"
 QNX_DISK_DATA_BLKSIZE ?= "4096"
 
@@ -152,11 +159,18 @@ python do_generate_diskfiles() {
         # Two passes: the size marker cannot be known until the file is
         # expanded, and expanding needs a value for it. Expand once with a
         # placeholder purely to measure, then again for real.
+        # bitbake stores values literally, so a multi-line QNX_DISK_DATA_EXTRA
+        # has to be written with a literal \n and translated here -- the same
+        # treatment QNX_IFS_EXTRA_ENTRIES gets. .strip() drops the leading space
+        # a "+=" leaves behind, which mkqnx6fsimg rejects as a malformed filename.
+        extra = (d.getVar('QNX_DISK_DATA_EXTRA') or '').replace('\\n', '\n').strip()
+
         probe = os.path.join(d.getVar('B'), os.path.basename(out) + '.probe')
         with open(probe, 'w') as f:
             f.write(qnx_expand_template(d, template, {
                 'QNX_DISK_BOOT_SECTORS': '0',
                 'QNX_DISK_DATA_SECTORS': '0',
+                'QNX_DISK_DATA_EXTRA': extra,
             }))
 
         if requested == 'auto':
@@ -176,6 +190,7 @@ python do_generate_diskfiles() {
             f.write(qnx_expand_template(d, template, {
                 'QNX_DISK_BOOT_SECTORS': str(sectors),
                 'QNX_DISK_DATA_SECTORS': str(sectors),
+                'QNX_DISK_DATA_EXTRA': extra,
             }))
         os.remove(probe)
         return sectors
@@ -201,9 +216,22 @@ python do_compile() {
 
     b = d.getVar('B')
 
+    # A python task's subprocess inherits bitbake's environment, not the one
+    # bitbake generates for shell tasks -- so the SDP variables and HOME that
+    # `export` puts in a shell task are simply absent here. The SDP's licence
+    # check then looks for its lock file under the wrong home and reports
+    # "can't open file: /root/.qnxlicenses.lck", which reads like a permissions
+    # problem rather than a missing environment.
+    env = dict(os.environ)
+    for var in ('HOME', 'QNX_HOST', 'QNX_TARGET', 'QNX_CONFIGURATION',
+                'QNX_CONFIGURATION_EXCLUSIVE', 'PATH', 'PROCESSOR', 'ARCH'):
+        value = d.getVar(var)
+        if value:
+            env[var] = value
+
     def run(tool, buildfile, out):
         proc = subprocess.run([tool, buildfile, out], capture_output=True,
-                              text=True, cwd=b)
+                              text=True, cwd=b, env=env)
         return proc.returncode, (proc.stdout or '') + (proc.stderr or '')
 
     def build_partition(tool, buildfile, out, marker, auto):
@@ -226,14 +254,11 @@ python do_compile() {
             if rc == 0:
                 return
 
-            # Deliberately not keyed on the "No space left in image" text.
-            # mkfatfsimg prints that to stderr when run from a shell, but it
-            # does not reliably reach a captured pipe, so keying on it made the
-            # retry silently never happen. Any failure of an auto-sized
-            # partition is treated as "too small" and retried; a failure with a
-            # different cause still surfaces, with its own output, once the
-            # attempts run out.
-            if not auto:
+            # Only a genuine space failure is retried. Treating *any* failure
+            # as "too small" was worse: a licensing error was reported as
+            # "still fails after 5 attempts at growing it", having quietly
+            # inflated the partition from 50MB to 370MB on the way.
+            if not auto or 'No space left' not in output:
                 bb.fatal("%s failed on %s:\n%s"
                          % (tool, buildfile, output.strip() or '(no output)'))
 

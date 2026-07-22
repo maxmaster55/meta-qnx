@@ -44,7 +44,12 @@ QNX_TARGET ?= "${QNX_SDP_ROOT}/target/qnx"
 # qcc reads its target definitions from $QNX_CONFIGURATION (qconfig/, license/).
 # qnxsdp-env.sh points this at $HOME/.qnx; bitbake does pass HOME through, but
 # pin it explicitly so the build does not depend on the caller's environment.
-QNX_CONFIGURATION ?= "${@os.path.join(os.environ.get('HOME', '/root'), '.qnx')}"
+# ${HOME} rather than os.environ: bitbake already carries the invoking user's
+# home in the datastore, and it is correct per task. Reading os.environ here
+# instead evaluates in whichever bitbake process parses the class -- which set
+# HOME=/root and produced "You don't have a valid license for this product",
+# because the SDP looked for its licence under the wrong home.
+QNX_CONFIGURATION ?= "${HOME}/.qnx"
 QNX_CONFIGURATION_EXCLUSIVE ?= "${QNX_CONFIGURATION}"
 
 export QNX_HOST
