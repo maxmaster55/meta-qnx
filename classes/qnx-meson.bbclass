@@ -21,7 +21,6 @@
 
 inherit qnx-sdp
 
-HOSTTOOLS += "meson ninja pkg-config"
 
 B = "${WORKDIR}/build"
 
@@ -125,6 +124,14 @@ endian = '%s'
 addtask generate_meson_cross after do_patch before do_configure
 
 export PKG_CONFIG_LIBDIR = "${QNX_MESON_STAGE}/lib/pkgconfig:${RECIPE_SYSROOT}${QNX_STAGE_USRLIBDIR}/pkgconfig"
+
+# OE sets PKG_CONFIG_SYSROOT_DIR to the recipe sysroot, which makes pkg-config
+# prepend it to every path a .pc reports. The .pc files here already hold real
+# absolute paths -- into the SDP, or into a stage directory -- so that rewriting
+# turns "-I/opt/qnx800/..." into "-I<sysroot>/opt/qnx800/...", which exists
+# nowhere. The symptom is a dependency that pkg-config finds while its headers
+# "could not be found".
+export PKG_CONFIG_SYSROOT_DIR = ""
 
 do_configure() {
 	meson setup ${B} ${S} --cross-file ${QNX_MESON_CROSS} \
