@@ -40,6 +40,25 @@ export ARCH = "${QNX_PROCESSOR}"
 QNX_IFS_INSTALL ?= ""
 DEPENDS += "${QNX_IFS_INSTALL}"
 
+# ---------------------------------------------------------------------------
+# Boot configuration
+# ---------------------------------------------------------------------------
+# Available to templates as @QNX_STARTUP@, @QNX_IMAGE_ADDR@ and so on.
+#
+# These describe a boot environment, not a CPU, which is why they live on the
+# image and not on the machine: one aarch64le tree legitimately produces both a
+# hypervisor host (loaded by the board's firmware at a low address, raw and
+# compressed, board-specific startup) and its guests (loaded by qvm at a high
+# address, ELF, generic startup). The defaults below are the guest case.
+QNX_STARTUP ?= "startup-armv8_fm"
+QNX_STARTUP_ARGS ?= "-H"
+QNX_KERNEL ?= "procnto-smp-instr"
+QNX_KERNEL_ARGS ?= "-v"
+QNX_IMAGE_ADDR ?= "0x80000000"
+QNX_IMAGE_VIRTUAL ?= "${QNX_PROCESSOR},elf"
+QNX_IFS_PATH ?= "/proc/boot:/bin:/usr/bin:/sbin:/usr/sbin"
+QNX_IFS_LD_LIBRARY_PATH ?= "/proc/boot:/lib:/usr/lib:/lib/dll"
+
 # Recipe-provided:
 #   QNX_IFS_NAME     -- basename of the image, also passed to mkifs -a
 #   QNX_IFS_TEMPLATE -- .build template containing the @...@ markers
@@ -54,6 +73,14 @@ QNX_IFS_BUILDFILE ?= "${B}/${QNX_IFS_NAME}.build"
 # so generated entries can refer to them by bare name exactly as the template
 # refers to SDP binaries.
 QNX_IFS_ROOT ?= "${RECIPE_SYSROOT}${QNX_STAGE_DIR}"
+
+# Additional roots, searched after the recipe sysroot and before $QNX_TARGET.
+# mkifs accepts -r repeatedly and searches them left to right, which is what lets
+# a board layer add a BSP install tree holding binaries the SDP does not ship --
+# an RPi5 host image needs startup-bcm2712-rpi5, i2c-dwc-rpi5, gpio-rp1 and
+# friends, none of which exist under $QNX_TARGET.
+QNX_IFS_EXTRA_ROOTS ?= ""
+QNX_IFS_ROOTS ?= "${QNX_IFS_ROOT} ${QNX_IFS_EXTRA_ROOTS}"
 
 python do_generate_buildfile() {
     import os
@@ -120,8 +147,32 @@ python do_generate_buildfile() {
         bb.fatal("%s contains no @QNX_IFS_FILES@ marker, so installed recipes "
                  "have nowhere to go" % template)
 
-    content = content.replace('@QNX_IFS_FILES@', files)
-    content = content.replace('@QNX_IFS_STARTUP@', startup)
+    # Any @VARIABLE@ in the template is expanded from the datastore, with the
+    # two generated sections above taking precedence. That is what lets one
+    # template serve different boot environments: a hypervisor host and a guest
+    # differ in startup program, image address and virtual type, not in
+    # structure. Those are image properties, not machine properties -- a single
+    # aarch64le tree legitimately produces both, exactly as the project's
+    # qnx_host/ and qnx_guests/ do today.
+    #
+    # bitbake's own ${...} syntax is deliberately not used for this: mkifs build
+    # files use ${...} for their own variables (${PROCESSOR}, ${QNX_TARGET}),
+    # and expanding those here would corrupt them.
+    generated = {
+        'QNX_IFS_FILES': files,
+        'QNX_IFS_STARTUP': startup,
+    }
+
+    def expand(match):
+        name = match.group(1)
+        if name in generated:
+            return generated[name]
+        value = d.getVar(name)
+        if value is None:
+            bb.fatal("%s references @%s@, which is not set" % (template, name))
+        return value
+
+    content = re.sub(r'@([A-Z][A-Z0-9_]*)@', expand, content)
 
     buildfile = d.getVar('QNX_IFS_BUILDFILE')
     bb.utils.mkdirhier(os.path.dirname(buildfile))
@@ -138,10 +189,18 @@ do_mkifs() {
 	mkdir -p ${B}
 	cd ${B}
 
+	roots=""
+	for r in ${QNX_IFS_ROOTS}; do
+		if [ ! -d "$r" ]; then
+			bbfatal "mkifs search root does not exist: $r"
+		fi
+		roots="$roots -r$r"
+	done
+
 	# -a<name>: name embedded in the image and used for the .sym files mkifs
 	#           drops beside it (procnto-*.sym, startup-*.sym), which are what
 	#           you feed gdb when debugging the image.
-	mkifs -a${QNX_IFS_NAME} -r${QNX_IFS_ROOT} -v \
+	mkifs -a${QNX_IFS_NAME} $roots -v \
 		${QNX_IFS_BUILDFILE} ${QNX_IFS_NAME}.ifs
 }
 addtask mkifs after do_compile before do_install

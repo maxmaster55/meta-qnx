@@ -24,11 +24,11 @@
 
 [-optional]
 [+keeplinked]
-[image=0x80000000]
+[image=@QNX_IMAGE_ADDR@]
 
-[virtual=aarch64le,elf] boot = {
-    startup-armv8_fm -H
-    PATH=/proc/boot:/bin:/usr/bin:/sbin:/usr/sbin LD_LIBRARY_PATH=/proc/boot:/lib:/usr/lib:/lib/dll procnto-smp-instr -v
+[virtual=@QNX_IMAGE_VIRTUAL@] boot = {
+    @QNX_STARTUP@ @QNX_STARTUP_ARGS@
+    PATH=@QNX_IFS_PATH@ LD_LIBRARY_PATH=@QNX_IFS_LD_LIBRARY_PATH@ @QNX_KERNEL@ @QNX_KERNEL_ARGS@
 }
 
 [+script] startup-script = {

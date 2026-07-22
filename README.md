@@ -3,10 +3,13 @@
 A Yocto layer that builds **QNX** artifacts — QNX binaries with `qcc`, and bootable
 QNX image filesystems (IFS) with `mkifs` — using bitbake as the build orchestrator.
 
-Status: **working proof of concept.** It builds four applications with `qcc` — two toy
-examples and two ported from the QNX hypervisor project's makefile build, one make-based
-and one CMake-based — and assembles them into a minimal bootable aarch64le guest IFS. The
-mkifs build file is generated from the recipe list rather than maintained by hand.
+Status: **working proof of concept.**
+
+This layer is **mechanism only** — it contains no board, no project and no application
+policy. Everything it ships is either a class, the generic aarch64le machine, or a
+self-contained example. A project layer supplies the rest; `meta-qnx-hyp` is a worked
+example that builds a Raspberry Pi 5 hypervisor host image without meta-qnx knowing
+anything about the Pi.
 
 ## Can Yocto really build QNX?
 
@@ -175,8 +178,6 @@ The IFS is a drop-in for a QNX hypervisor guest: it expects a `virtio-console` v
 | `conf/machine/qnx-aarch64le.conf` | Thin machine: no kernel, no bootloader, no rootfs. |
 | `recipes-example/qnx-hello/` | Hello-world C program built with `qcc`. |
 | `recipes-example/qnx-sysinfo/` | Second app, existing to show that adding one costs one word. |
-| `recipes-apps/shm-chunker/` | Real app from `src/shm_sender` (plain make). |
-| `recipes-apps/rpi-gpio/` | Real app from `src/rpi-gpio` (CMake, ships a public header). |
 | `recipes-image/qnx-ifs-hello/` | Minimal bootable IFS, plus the `.build.in` template. |
 
 ### The staging contract
@@ -237,16 +238,37 @@ Trade-off: `externalsrc` disables sstate for those recipes, so `do_compile` runs
 time. That is the right default while porting; a recipe that has stabilised can move to a
 real `SRC_URI` with a pinned revision.
 
-Two real applications are ported as worked examples:
+Worked examples of both live in `meta-qnx-hyp`: `shm-chunker` (plain make) and `rpi-gpio`
+(CMake, and notably a recipe with *no install code at all* — the project's own `install()`
+rules already target the right layout).
 
-- **`shm-chunker`** (`src/shm_sender`, plain make) — its Makefile already cross-compiles
-  correctly, so the recipe drives it as-is. `EXTRA_OEMAKE` passes `CC`/`CXX` on the command
-  line to override the makefile's own assignment. `CFLAGS` is deliberately not passed: the
-  makefile uses simple assignment, so overriding it would drop its `-std` and `-V` flags.
-- **`rpi-gpio`** (`src/rpi-gpio`, CMake) — the recipe contains **no install code at all**.
-  The project's own `install()` rules already target `${CMAKE_SYSTEM_PROCESSOR}/sbin` and
-  `usr/include/sys`, which with the prefix set to the stage tree lands the binary in the
-  image and the public header in the sysroot only.
+## Describing an image
+
+An image recipe sets its boot environment; the template refers to it through `@VARIABLE@`
+markers, which are expanded from the datastore. That is what lets one layer describe both
+a hypervisor host and its guests:
+
+| Variable | Default (guest) | Host example |
+| --- | --- | --- |
+| `QNX_IMAGE_ADDR` | `0x80000000` | `0x80000` |
+| `QNX_IMAGE_VIRTUAL` | `${QNX_PROCESSOR},elf` | `${QNX_PROCESSOR},raw -compress` |
+| `QNX_STARTUP` | `startup-armv8_fm` | `startup-bcm2712-rpi5` |
+| `QNX_STARTUP_ARGS` | `-H` | `-v -u reg -a -W 5000 -Q enable,el1-host` |
+| `QNX_KERNEL` | `procnto-smp-instr` | — |
+
+These are image properties, not machine properties: one aarch64le tree legitimately
+produces both, exactly as the project's `qnx_host/` and `qnx_guests/` do.
+
+bitbake's own `${...}` syntax is deliberately *not* used for this — mkifs build files use
+`${...}` for their own variables (`${PROCESSOR}`, `${QNX_TARGET}`), and expanding those
+here would corrupt them.
+
+### Extra search roots
+
+`QNX_IFS_EXTRA_ROOTS` adds further `mkifs -r` roots, searched after the recipe sysroot and
+before `$QNX_TARGET`. A board layer needs this when the SDP does not ship its drivers — an
+RPi5 host image needs `startup-bcm2712-rpi5`, `i2c-dwc-rpi5` and `gpio-rp1`, none of which
+exist under `$QNX_TARGET`.
 
 ## Not done yet
 
