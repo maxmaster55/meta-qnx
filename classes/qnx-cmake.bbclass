@@ -52,8 +52,15 @@ set(CMAKE_RANLIB ${QNX_HOST}/usr/bin/${QNX_TOOL_PREFIX}ranlib)
 set(CMAKE_LINKER ${QNX_HOST}/usr/bin/${QNX_TOOL_PREFIX}ld)
 
 add_definitions(-D_QNX_SOURCE)
-set(CMAKE_C_FLAGS_INIT "-fexceptions -fPIC")
-set(CMAKE_CXX_FLAGS_INIT "-fexceptions -fPIC")
+
+# The recipe's CFLAGS/CXXFLAGS are folded in here rather than left to the
+# environment: cmake reads those env vars only on a first configure and caches
+# them, so a recipe that added a define would silently not get it on a
+# reconfigure. Putting them in the toolchain file makes them part of the
+# configuration itself, which is also what the project's own hand-written QNX
+# toolchain file does.
+set(CMAKE_C_FLAGS_INIT "-fexceptions -fPIC ${CFLAGS}")
+set(CMAKE_CXX_FLAGS_INIT "-fexceptions -fPIC ${CXXFLAGS}")
 
 # Search the SDP *and* this recipe's sysroot, so a DEPENDS on another QNX recipe
 # makes its headers and libraries findable by find_path/find_library/find_package.
@@ -82,6 +89,13 @@ addtask generate_toolchain_file after do_patch before do_configure
 # function names from the class name, and a dash is illegal in one. A recipe
 # that needs different behaviour overrides the task in the usual way.
 do_configure() {
+	# CMAKE_<LANG>_FLAGS_INIT in the toolchain file seeds the cache only on a
+	# *first* configure. A build directory left over from an earlier run would
+	# keep its old flags, so a recipe that adds a define appears to be ignored.
+	# Removing the cache makes every configure honour the current flags.
+	rm -f ${B}/CMakeCache.txt
+	rm -rf ${B}/CMakeFiles
+
 	cmake -S ${OECMAKE_SOURCEPATH} -B ${B} \
 		-G "${OECMAKE_GENERATOR}" \
 		-DCMAKE_TOOLCHAIN_FILE=${QNX_TOOLCHAIN_FILE} \

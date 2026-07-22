@@ -288,7 +288,7 @@ QNX_IFS_SEARCHABLE_DIRS ?= "bin sbin lib usr/bin usr/sbin usr/lib lib/dll boot/s
 # IFS would only waste RAM. Excluded silently -- unlike an unexpected location,
 # this is not a mistake worth warning about.
 QNX_IFS_EXCLUDE_DIRS ?= "usr/include include"
-QNX_IFS_EXCLUDE_SUFFIXES ?= ".a .la .pc .h .hpp"
+QNX_IFS_EXCLUDE_SUFFIXES ?= ".a .la .pc .h .hpp .cmake"
 
 def qnx_expand_template(d, template, generated=None):
     """Expand @VARIABLE@ markers in a template against the datastore.
