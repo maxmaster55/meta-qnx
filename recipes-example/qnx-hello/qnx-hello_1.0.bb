@@ -8,6 +8,11 @@ SRC_URI = "file://qnx-hello.c"
 
 inherit qnx-sdp
 
+# Run it from the image's startup script. Nothing else is declared: the .files
+# drop-in that puts /bin/qnx-hello into the image is derived automatically from
+# what do_install stages.
+QNX_IFS_STARTUP_CMD = "qnx-hello"
+
 # scarthgap has no UNPACKDIR (that arrived in styhead), so file:// sources are
 # unpacked straight into WORKDIR.
 S = "${WORKDIR}"

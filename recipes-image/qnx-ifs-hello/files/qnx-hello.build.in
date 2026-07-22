@@ -1,0 +1,88 @@
+################################################################################
+## Minimal QNX IFS -- TEMPLATE.
+##
+## This file is not handed to mkifs directly. qnx-ifs.bbclass expands the two
+## @...@ markers below from the recipes listed in QNX_IFS_INSTALL and writes the
+## real .build file into ${B} (and into the deploy dir next to the .ifs, so you
+## can always read exactly what was built).
+##
+## The point: adding an application means adding its name to QNX_IFS_INSTALL in
+## the image recipe. This file is only touched when the *image* changes -- a
+## different console, a different boot address, a new driver.
+##
+## What stays here is genuinely image-specific: the boot line, the console, and
+## the shape of the startup script. Modelled on
+## qnx_guests/images/guest-2/qnx800-guest-2.build from the QNX hypervisor
+## project, stripped to the bone: no m4 includes, no networking, no ssh/qconn,
+## no block or watchdog drivers.
+##
+## Unqualified names (startup-armv8_fm, procnto-smp-instr, ksh, devc-virtio,
+## libc.so) are resolved by mkifs out of $QNX_TARGET. Names contributed by
+## recipes resolve the same way out of the stage tree passed as `mkifs -r`,
+## which is why that tree mirrors $QNX_TARGET's layout (aarch64le/bin/...).
+################################################################################
+
+[-optional]
+[+keeplinked]
+[image=0x80000000]
+
+[virtual=aarch64le,elf] boot = {
+    startup-armv8_fm -H
+    PATH=/proc/boot:/bin:/usr/bin:/sbin:/usr/sbin LD_LIBRARY_PATH=/proc/boot:/lib:/usr/lib:/lib/dll procnto-smp-instr -v
+}
+
+[+script] startup-script = {
+    SYSNAME=nto
+    TERM=qansi
+
+    procmgr_symlink ../../proc/boot/ldqnx-64.so.2 /usr/lib/ldqnx-64.so.2
+
+    # Needed for ksh to run anything below
+    pipe
+    slogger2
+
+    # virtio-console. Must match the guest's qvmconf:
+    #   vdev virtio-console / intr gic:42
+    devc-virtio 0x20000000,42
+    waitfor /dev/vcon1 4
+    reopen /dev/vcon1
+
+    display_msg " "
+    display_msg "Starting applications ..."
+
+    ############################################################################
+    ## Contributed by QNX_IFS_STARTUP_CMD of each installed recipe.
+    ############################################################################
+@QNX_IFS_STARTUP@
+
+    display_msg "Starting shell ..."
+    [+session] ksh &
+}
+
+[uid=0 gid=0]
+
+[type=link] /bin/sh=/bin/ksh
+[type=link] /tmp=/dev/shmem
+[type=link] /dev/console=/dev/vcon1
+
+################################################################################
+## Applications -- generated from QNX_IFS_INSTALL. Do not add entries by hand;
+## add the recipe to QNX_IFS_INSTALL in the image recipe instead.
+################################################################################
+@QNX_IFS_FILES@
+
+################################################################################
+## Base system: console driver and a few utilities for poking around.
+## mkifs pulls in each binary's shared library dependencies automatically.
+##
+## Keep this list to binaries the SDP actually ships: this install has no
+## standalone ls/cat/uname (QNX 8 leans on ksh builtins), and mkifs fails hard
+## with "Host file 'x' not available" rather than skipping a missing one.
+## Check with: ls $QNX_TARGET/aarch64le/bin
+################################################################################
+/sbin/devc-virtio=devc-virtio
+
+/bin/ksh=ksh
+/bin/pidin=pidin
+/bin/waitfor=waitfor
+/bin/slay=slay
