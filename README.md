@@ -6,7 +6,8 @@ image filesystems (IFS) with `mkifs` — using bitbake as the build orchestrator
 **Documentation:**
 [Getting started](docs/getting-started.md) ·
 [Variable reference](docs/variables.md) ·
-[Cookbook](docs/cookbook.md)
+[Cookbook](docs/cookbook.md) ·
+[Managing the SDP](docs/sdp.md)
 
 Status: **working proof of concept.**
 
@@ -78,6 +79,9 @@ Full instructions in [docs/getting-started.md](docs/getting-started.md).
 | `classes/qnx-ifs.bbclass` | Expands `QNX_IFS_INSTALL` into a generated `.build` file, runs `mkifs`, deploys the results. |
 | `classes/qnx-cmake.bbclass` | CMake projects: generates a QNX toolchain file, drives configure/build/install. |
 | `classes/qnx-project-src.bbclass` | Builds an application working tree in place via `externalsrc`. |
+| `classes/qnx-disk.bbclass` | FAT + QNX6 partitions wrapped in an MBR: a flashable `.img`, sized automatically. |
+| `classes/qnx-sdp-packages.bbclass` | Feature-to-package resolution and lockfile handling for the SDP. |
+| `recipes-sdp/qnx-sdp/` | Tasks to check, search, resolve and install SDP packages. |
 | `conf/machine/qnx-aarch64le.conf` | Thin machine: no kernel, no bootloader, no rootfs. |
 | `recipes-example/qnx-hello/` | Hello-world C program built with `qcc`. |
 | `recipes-example/qnx-sysinfo/` | Second app, showing that adding one costs one word. |
@@ -116,18 +120,16 @@ download, none of it ever used.
 
 ## Not done yet
 
-1. A `qnx-sdp-native` recipe wrapping `qnxsoftwarecenter_clt -importAndInstall`, so the SDP
-   itself is provisioned by bitbake instead of by hand.
-2. A meson class, for the GPU dependencies (`libepoxy`, `virglrenderer`) —
+1. A meson class, for the GPU dependencies (`libepoxy`, `virglrenderer`) —
    `src/qnx-aarch64le.ini` is already a meson cross file and can be templated the way
    `qnx-cmake` templates its toolchain file.
-3. Routing image content to a QNX6 data partition (`mkqnx6fsimg`) rather than the IFS. An
-   IFS is RAM-resident, which is why a real system carries a separate `rootfs.img`.
-4. The SDP version is not in the task hash, only its path — upgrading the SDP in place will
+2. Routing *application* content to the QNX6 data partition rather than the IFS. The
+   partition exists (`qnx-disk`), but recipes cannot yet target it — an IFS is
+   RAM-resident, so large payloads belong there.
+3. The SDP version is not in the task hash, only its path — upgrading the SDP in place will
    not trigger rebuilds.
-5. A QA check that staged binaries really are QNX aarch64 ELFs, to catch a recipe whose
+4. A QA check that staged binaries really are QNX aarch64 ELFs, to catch a recipe whose
    build system ignored `${CC}` and used the host compiler. A check that every bare name in
    a build file resolves would catch the `Host file 'x' not available` class of error up
    front too.
-6. `mkfatfsimg` / `diskimage` support, to produce a full bootable `disk.img` (FAT boot
-   partition + QNX6 data partition) rather than just an IFS.
+

@@ -15,6 +15,7 @@ real recipe in this layer or in `meta-qnx-hyp`.
 - [Putting a file somewhere unusual](#putting-a-file-somewhere-unusual)
 - [A new image](#a-new-image)
 - [A board that needs binaries the SDP lacks](#a-board-that-needs-binaries-the-sdp-lacks)
+- [A flashable SD card image](#a-flashable-sd-card-image)
 - [Debugging what ended up in an image](#debugging-what-ended-up-in-an-image)
 
 ---
@@ -342,6 +343,55 @@ Nested directories need a subpath, because the search path is flat — `lib/dll`
 
 ```
 /lib/dll/pci/pci_slog2.so=pci/pci_slog2.so
+```
+
+## A flashable SD card image
+
+An IFS is not something you can write to a card. `qnx-disk` wraps it in a
+partitioned disk:
+
+```bitbake
+inherit qnx-disk
+
+S = "${WORKDIR}"
+SRC_URI = "file://my-boot.build.in file://my-data.build.in file://my-disk.cfg.in"
+
+QNX_DISK_NAME = "my"
+QNX_DISK_DATA_TEMPLATE = "${S}/my-data.build.in"   # optional partition
+
+# The image whose .ifs goes on the boot partition.
+QNX_DISK_INSTALL = "my-image"
+do_generate_diskfiles[depends] += "my-image:do_deploy"
+
+# Everything is "auto" by default. The data partition is written to at runtime,
+# so give it a real size rather than sizing it to its initial contents.
+QNX_DISK_DATA_SIZE = "512M"
+```
+
+The boot template needs the size marker and the files the board's firmware wants:
+
+```
+[num_sectors=@QNX_DISK_BOOT_SECTORS@]
+
+config.txt = {
+arm_64bit=1
+kernel=qnx_sdp.ifs
+}
+
+qnx_sdp.ifs = @DEPLOY_DIR_IMAGE@/my-image.ifs
+```
+
+Then:
+
+```bash
+bitbake my-disk
+sudo bmaptool copy tmp/deploy/images/qnx-aarch64le/my.img /dev/sdX
+```
+
+Check it before flashing:
+
+```bash
+fdisk -l my.img      # bootable FAT32 partition + type-179 QNX6 partition
 ```
 
 ## Debugging what ended up in an image

@@ -47,7 +47,7 @@ QNX_DISK_CFG_TEMPLATE ?= "${S}/${QNX_DISK_NAME}-disk.cfg.in"
 #   QNX_DISK_SIZE        the whole disk             -> @QNX_DISK_CYLINDERS@
 #
 # "auto" for a partition measures the files its build file references and adds
-# QNX_DISK_SLACK. "auto" for the disk sums the partition images that were built,
+# QNX_DISK_SLACK_PERCENT. "auto" for the disk sums the partition images that were built,
 # so it is exact rather than estimated.
 QNX_DISK_BOOT_SIZE ?= "auto"
 QNX_DISK_DATA_SIZE ?= "auto"

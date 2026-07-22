@@ -41,6 +41,19 @@ QNX_IFS_INSTALL ?= ""
 DEPENDS += "${QNX_IFS_INSTALL}"
 
 # ---------------------------------------------------------------------------
+# SDP verification
+# ---------------------------------------------------------------------------
+# Check the installed SDP against the project's lockfile before building an
+# image. It is read-only, offline and takes well under a second, and it turns a
+# missing package into a named error instead of mkifs failing with
+# "Host file 'x' not available" and a build-file line number.
+#
+# Set QNX_SDP_CHECK = "0" to skip it. It is also a no-op when neither a lockfile
+# nor QNX_QSC_CLT is configured, so this is safe to leave on by default.
+QNX_SDP_CHECK ?= "1"
+do_mkifs[depends] += "${@'qnx-sdp:do_check_sdp' if d.getVar('QNX_SDP_CHECK') == '1' else ''}"
+
+# ---------------------------------------------------------------------------
 # Boot configuration
 # ---------------------------------------------------------------------------
 # Available to templates as @QNX_STARTUP@, @QNX_IMAGE_ADDR@ and so on.

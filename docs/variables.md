@@ -8,6 +8,8 @@ Every variable the layer defines, grouped by where you would set it. Defaults ar
 - [Staging paths](#staging-paths) — where a recipe installs
 - [Application recipes](#application-recipes) — what a recipe contributes to an image
 - [Image recipes](#image-recipes) — what an image is
+- [Disk images](#disk-images) — a flashable .img
+- [SDP packages](#sdp-packages) — see also [sdp.md](sdp.md)
 - [CMake projects](#cmake-projects)
 - [Working-tree builds](#working-tree-builds)
 - [Tasks](#tasks)
@@ -358,6 +360,107 @@ error. Two are generated rather than looked up:
 bitbake's `${...}` is deliberately **not** used for this: mkifs build files use `${...}`
 for their own variables (`${PROCESSOR}`, `${QNX_TARGET}`), and expanding those would
 corrupt them.
+
+---
+
+## Disk images
+
+`inherit qnx-disk`. Produces a single `.img` you can write straight to an SD card:
+a FAT boot partition (`mkfatfsimg`), an optional QNX6 data partition
+(`mkqnx6fsimg`), wrapped in an MBR (`diskimage`).
+
+### Sizes
+
+Each takes a byte count with an optional K/M/G suffix, or `auto`.
+
+| Variable | Default | Marker in template |
+| --- | --- | --- |
+| `QNX_DISK_BOOT_SIZE` | `auto` | `@QNX_DISK_BOOT_SECTORS@` |
+| `QNX_DISK_DATA_SIZE` | `auto` | `@QNX_DISK_DATA_SECTORS@` |
+| `QNX_DISK_SIZE` | `auto` | `@QNX_DISK_CYLINDERS@` |
+
+`auto` for a **partition** measures the files its build file references, plus
+inline `{ }` bodies, and adds `QNX_DISK_SLACK_PERCENT` over a floor. `auto` for
+the **disk** sums the partition images actually produced, so it is exact rather
+than estimated.
+
+An explicit `QNX_DISK_SIZE` smaller than its contents is a hard error naming both
+numbers, rather than a corrupt image.
+
+> The data partition is written to at runtime, so `auto` — which sizes it to its
+> initial contents — is usually not what you want. Give it a real size.
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `QNX_DISK_SLACK_PERCENT` | `25` | headroom added to an auto-sized partition |
+| `QNX_DISK_BOOT_MIN` | `32M` | floor for the boot partition |
+| `QNX_DISK_DATA_MIN` | `64M` | floor for the data partition |
+| `QNX_DISK_RESERVED` | `1M` | space before the first partition, for MBR/IPL |
+
+### Layout and templates
+
+| Variable | Default |
+| --- | --- |
+| `QNX_DISK_NAME` | `${PN}` |
+| `QNX_DISK_BOOT_TEMPLATE` | `${S}/${QNX_DISK_NAME}-boot.build.in` |
+| `QNX_DISK_DATA_TEMPLATE` | `""` — optional; set it to add a data partition |
+| `QNX_DISK_CFG_TEMPLATE` | `${S}/${QNX_DISK_NAME}-disk.cfg.in` |
+| `QNX_DISK_INSTALL` | `""` — image recipes whose `.ifs` this disk needs |
+| `QNX_DISK_SEARCH_ROOTS` | `${B} ${DEPLOY_DIR_IMAGE}` — where auto-sizing resolves bare names |
+
+QNX6 format-time parameters, available as `@QNX_DISK_DATA_INODES@` and
+`@QNX_DISK_DATA_BLKSIZE@`:
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `QNX_DISK_DATA_INODES` | `50000` | preallocated at format time — a hard ceiling on file count |
+| `QNX_DISK_DATA_BLKSIZE` | `4096` | |
+
+Geometry, available as `@QNX_DISK_HEADS@` and friends. The defaults make a
+cylinder exactly 1 MiB, which keeps sizes on whole megabytes and partitions
+aligned:
+
+| Variable | Default |
+| --- | --- |
+| `QNX_DISK_HEADS` | `64` |
+| `QNX_DISK_SECTORS_PER_TRACK` | `32` |
+| `QNX_DISK_SECTOR_SIZE` | `512` |
+
+### Output
+
+`tmp/deploy/images/<machine>/` gets the disk image, a `.bmap` if `bmaptool` is
+available (faster flashing; optional, and a failure only warns), the intermediate
+`part-*.img`, and the generated `boot.build` / `data.build` / `disk.cfg` — which
+are what you read when a disk does not boot.
+
+```bash
+sudo bmaptool copy qnx-host-disk.img /dev/sdX     # with the block map
+sudo dd if=qnx-host-disk.img of=/dev/sdX bs=4M conv=fsync status=progress
+```
+
+---
+
+## SDP packages
+
+`inherit qnx-sdp-packages`. Full guide in [sdp.md](sdp.md).
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `QNX_QSC_CLT` | `""` | path to `qnxsoftwarecenter_clt` |
+| `QNX_QSC_URL` | `https://www.qnx.com/swcenter` | repository |
+| `QNX_QSC_PROFILE` | `""` | p2 profile; derived automatically when empty |
+| `QNX_QSC_EXTRA_ARGS` | `-setExperimentalEnabled=true -setPolicy=conservative` | |
+| `QNX_SDP_CREDENTIALS_FILE` | `$HOME/.qnx/qsc-credentials` | myQNX login, `@file` form; excluded from signatures |
+| `QNX_SDP_VERSION` | `qnx800` | drives the package id prefix |
+| `QNX_SDP_PKG_PREFIX` | `com.qnx.${QNX_SDP_VERSION}` | |
+| `QNX_SDP_FEATURES` | `""` | feature names to install |
+| `QNX_SDP_FEATURE[name]` | *(see `conf/qnx-sdp-features.inc`)* | glob patterns defining a feature |
+| `QNX_SDP_LOCKFILE` | `""` | resolved `<id>/<version>` snapshot |
+| `QNX_SDP_EXTRA_PACKAGES` | `""` | ids to install regardless of features |
+| `QNX_SDP_EXCLUDE_PACKAGES` | `""` | id patterns to keep out |
+| `QNX_SDP_REQUIRES` | `""` | packages this recipe needs; verified by `check_sdp` |
+| `QNX_SDP_SEARCH` | `""` | filter for `-c search` |
+| `QNX_SDP_CHECK` | `1` | whether image builds verify the SDP first |
 
 ---
 
