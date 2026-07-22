@@ -25,7 +25,12 @@ existing `qsc_install_packages.list` can be adopted unchanged.
 
 ## Configuration
 
+Where the SDP lives is `QNX_SDP_ROOT`, which defaults to `${TOPDIR}/qnx-sdp` in the same
+spirit as `DL_DIR` — so with no configuration at all, `install_sdp` creates one inside the
+build directory. Point it elsewhere to manage an SDP you already have.
+
 ```bitbake
+QNX_SDP_ROOT = "/path/to/qnx800"          # optional; defaults into the build dir
 QNX_QSC_CLT = "/path/to/qnxsoftwarecenter/qnxsoftwarecenter_clt"
 QNX_SDP_LOCKFILE = "${QNX_PROJECT_SRC}/qsc_install_packages.list"
 QNX_SDP_FEATURES = "core toolchain utils networking hypervisor"

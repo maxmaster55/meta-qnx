@@ -61,13 +61,17 @@ cannot express without hand-ordering.
 
 ```bash
 source poky/oe-init-build-env build-qnx
-# add meta-qnx to conf/bblayers.conf, then in conf/local.conf:
-#   MACHINE = "qnx-aarch64le"
-#   QNX_SDP_ROOT = "/path/to/qnx800"
+# add meta-qnx to conf/bblayers.conf, then paste conf/local.conf.sample into
+# conf/local.conf and point QNX_SDP_ROOT at your SDP. It defaults to
+# ${TOPDIR}/qnx-sdp, like DL_DIR, so that is the only line you normally change.
 
-bitbake qnx-ifs-hello
+bitbake qnx-ifs-hello                                  # a bootable IFS
+bitbake qnx-host-disk                                  # ...on a flashable disk image
 dumpifs tmp/deploy/images/qnx-aarch64le/qnx-hello.ifs
 ```
+
+No SDP yet? Leave `QNX_SDP_ROOT` alone and run `bitbake -c install_sdp qnx-sdp` to create
+one in the build directory — see [docs/sdp.md](docs/sdp.md).
 
 Full instructions in [docs/getting-started.md](docs/getting-started.md).
 
@@ -83,6 +87,8 @@ Full instructions in [docs/getting-started.md](docs/getting-started.md).
 | `classes/qnx-sdp-packages.bbclass` | Feature-to-package resolution and lockfile handling for the SDP. |
 | `recipes-sdp/qnx-sdp/` | Tasks to check, search, resolve and install SDP packages. |
 | `conf/machine/qnx-aarch64le.conf` | Thin machine: no kernel, no bootloader, no rootfs. |
+| `conf/qnx-sdp-features.inc` | Feature definitions: names mapped to package id patterns. |
+| `conf/local.conf.sample` | Copy-paste configuration block for a build directory. |
 | `recipes-example/qnx-hello/` | Hello-world C program built with `qcc`. |
 | `recipes-example/qnx-sysinfo/` | Second app, showing that adding one costs one word. |
 | `recipes-image/qnx-ifs-hello/` | Minimal bootable IFS, plus the `.build.in` template. |
