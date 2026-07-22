@@ -57,6 +57,7 @@ QNX_IFS_ROOT ?= "${RECIPE_SYSROOT}${QNX_STAGE_DIR}"
 
 python do_generate_buildfile() {
     import os
+    import re
 
     template = d.getVar('QNX_IFS_TEMPLATE')
     if not os.path.isfile(template):
@@ -67,22 +68,40 @@ python do_generate_buildfile() {
     dropin_dir = d.getVar('RECIPE_SYSROOT') + d.getVar('QNX_IFS_DROPIN_DIR')
     installed = (d.getVar('QNX_IFS_INSTALL') or '').split()
 
-    def collect(suffix):
-        """Concatenate the <pn><suffix> drop-ins of everything installed.
+    def read_dropins(suffix):
+        """Read the <pn><suffix> drop-ins of everything installed.
 
         Iterating QNX_IFS_INSTALL rather than globbing the directory keeps the
         result deterministic and independent of what else happens to be in the
         shared sysroot."""
         out = []
-        for pn in installed:
+        for index, pn in enumerate(installed):
             path = os.path.join(dropin_dir, pn + suffix)
             if os.path.isfile(path):
                 with open(path) as f:
-                    out.append(f.read().rstrip('\n'))
-        return '\n'.join(out)
+                    out.append((index, pn, f.read().rstrip('\n')))
+        return out
 
-    files = collect('.files')
-    startup = collect('.startup')
+    files = '\n'.join(text for _, _, text in read_dropins('.files'))
+
+    # Startup fragments are ordered by priority, so a driver can be brought up
+    # before the resource manager that needs it. The priority is carried in the
+    # fragment's header line ("### <pn> prio=<n>") because the image recipe
+    # cannot read another recipe's variables.
+    #
+    # Sorting on (priority, list index) makes the order of QNX_IFS_INSTALL the
+    # tiebreak, so equal priorities stay predictable and controllable.
+    def priority_of(pn, text):
+        match = re.match(r'###\s+\S+\s+prio=(\d+)', text)
+        if match:
+            return int(match.group(1))
+        bb.warn("%s: startup fragment from '%s' has no priority header; "
+                "treating it as the default 500" % (d.getVar('PN'), pn))
+        return 500
+
+    fragments = read_dropins('.startup')
+    fragments.sort(key=lambda item: (priority_of(item[1], item[2]), item[0]))
+    startup = '\n'.join(text for _, _, text in fragments)
 
     # A recipe that stages nothing and starts nothing is almost certainly a
     # mistake -- a typo in QNX_IFS_INSTALL, or a recipe that never installed

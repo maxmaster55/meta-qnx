@@ -21,5 +21,15 @@ EXTERNALSRC_BUILD = "${WORKDIR}/build"
 # and needs no install override here at all. Note that those rules are guarded
 # by `if(DEFINED ENV{QNX_TARGET})`, which qnx-sdp.bbclass exports.
 
-# Run it from the image's startup script as a resource manager (background).
+# A resource manager: starts early, and everything after it can rely on the
+# device node being there.
+#
+# The waitfor is the part that actually matters. rpi_gpio is started with '&',
+# so the startup script continues the instant it forks -- long before
+# resmgr_attach() has registered /dev/gpio (see resmgr/main.c). Without this,
+# an application at a later priority can still lose the race and fail to open
+# the device. Priority orders the commands; waitfor is what makes the ordering
+# mean something.
 QNX_IFS_STARTUP_CMD = "rpi_gpio &"
+QNX_IFS_STARTUP_PRIORITY = "300"
+QNX_IFS_STARTUP_WAITFOR = "/dev/gpio"

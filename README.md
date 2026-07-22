@@ -66,6 +66,49 @@ The template keeps only what is genuinely image-specific: the boot line, the con
 driver, the startup-script skeleton. You touch it when the *image* changes, not when an
 *application* does.
 
+### Boot ordering
+
+A resource manager usually needs a driver up first. Two knobs, and you need
+both — priority alone is a trap:
+
+```bitbake
+QNX_IFS_STARTUP_CMD = "rpi_gpio &"
+QNX_IFS_STARTUP_PRIORITY = "300"      # lower runs earlier; default 500
+QNX_IFS_STARTUP_WAITFOR = "/dev/gpio" # block until it actually exists
+```
+
+Priority only orders the *commands*. A driver started with `&` forks and returns
+immediately, so the next command can still run before the device node exists —
+a classic QNX boot race. `QNX_IFS_STARTUP_WAITFOR` emits `waitfor <path> <timeout>`
+after the command, which is what genuinely blocks; it is the same idiom the project's
+own build files use (`devb-virtio ...` followed by `waitfor /dev/hd0`).
+
+It is declared by whoever *provides* the path, so everything later in the sequence is
+safe without needing to know who to wait for.
+
+Conventional bands, so unrelated recipes order correctly without knowing about each
+other:
+
+| Priority | For |
+| --- | --- |
+| 100 | hardware drivers, anything providing a `/dev` entry |
+| 300 | resource managers and services built on those |
+| 500 | applications (default) |
+| 700 | anything wanting the system fully up |
+
+Equal priorities fall back to `QNX_IFS_INSTALL` order, so listing order stays a usable
+tiebreak. The generated result is plain to read:
+
+```text
+### rpi-gpio prio=300
+rpi_gpio &
+waitfor /dev/gpio 5
+### qnx-hello prio=500
+qnx-hello
+### qnx-sysinfo prio=700
+qnx-sysinfo
+```
+
 Escape hatches, for recipes the automatic pass cannot describe:
 
 - `QNX_IFS_EXTRA_ENTRIES` — raw mkifs lines for permissions, uid/gid, symlinks, inline

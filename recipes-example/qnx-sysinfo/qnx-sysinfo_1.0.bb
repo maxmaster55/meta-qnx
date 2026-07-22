@@ -12,6 +12,10 @@ inherit qnx-sdp
 
 QNX_IFS_STARTUP_CMD = "qnx-sysinfo"
 
+# Deliberately late: it reports on the running system, so it is more useful once
+# drivers and resource managers have come up.
+QNX_IFS_STARTUP_PRIORITY = "700"
+
 # scarthgap has no UNPACKDIR (that arrived in styhead), so file:// sources are
 # unpacked straight into WORKDIR.
 S = "${WORKDIR}"

@@ -204,6 +204,34 @@ QNX_IFS_AUTO_ENTRIES ?= "1"
 # Command(s) to run from the image's startup script, e.g. "my-daemon &".
 QNX_IFS_STARTUP_CMD ?= ""
 
+# Where in the boot sequence those commands run. Lower runs earlier.
+# Conventional bands, so unrelated recipes can be ordered without knowing about
+# each other:
+#
+#     100  hardware drivers, and anything providing a /dev entry
+#     300  resource managers and system services built on those
+#     500  applications (the default)
+#     700  anything wanting the system fully up
+#
+# Ties keep QNX_IFS_INSTALL order, so listing order stays a usable tiebreak.
+QNX_IFS_STARTUP_PRIORITY ?= "500"
+
+# Paths this component provides, waited on after its command is issued.
+#
+# Priority alone is not enough, and trusting it is a classic QNX boot race: the
+# startup script issues commands in order, but a driver started with '&' forks
+# and returns immediately, so the next command can easily run before the device
+# exists. `waitfor` is what actually blocks until it does -- the same idiom the
+# project's own build files use ("devb-virtio ..." followed by "waitfor /dev/hd0").
+#
+# Declared by the component that *provides* the path, so everything later in the
+# sequence is safe without having to know who to wait for.
+QNX_IFS_STARTUP_WAITFOR ?= ""
+
+# Seconds before giving up, matching "waitfor /dev/vcon1 4" in the project's
+# guest build files.
+QNX_IFS_STARTUP_WAITFOR_TIMEOUT ?= "5"
+
 # Raw mkifs lines for anything the automatic pass cannot express: permissions,
 # uid/gid, symlinks, inline config files, [search=...] for unusual locations.
 QNX_IFS_EXTRA_ENTRIES ?= ""
@@ -279,16 +307,36 @@ python qnx_sdp_write_ifs_dropin() {
                 f.write(extra + '\n')
 
     startup = (d.getVar('QNX_IFS_STARTUP_CMD') or '').strip()
+    waitfor = (d.getVar('QNX_IFS_STARTUP_WAITFOR') or '').split()
+
+    if waitfor and not startup:
+        bb.warn("%s: QNX_IFS_STARTUP_WAITFOR is set but QNX_IFS_STARTUP_CMD is "
+                "not, so nothing will ever create %s"
+                % (pn, ' '.join(waitfor)))
+
     if startup:
+        prio = (d.getVar('QNX_IFS_STARTUP_PRIORITY') or '500').strip()
+        if not prio.isdigit():
+            bb.fatal("%s: QNX_IFS_STARTUP_PRIORITY must be a number, got '%s'"
+                     % (pn, prio))
+
+        timeout = (d.getVar('QNX_IFS_STARTUP_WAITFOR_TIMEOUT') or '5').strip()
+
         dropin_dir = destdir + d.getVar('QNX_IFS_DROPIN_DIR')
         bb.utils.mkdirhier(dropin_dir)
         with open(os.path.join(dropin_dir, pn + '.startup'), 'w') as f:
-            f.write('### %s\n' % pn)
+            # The header carries the priority to the image recipe, which cannot
+            # read another recipe's variables.
+            f.write('### %s prio=%s\n' % (pn, prio))
             f.write(startup + '\n')
+            for path in waitfor:
+                f.write('waitfor %s %s\n' % (path, timeout))
 }
 do_install[postfuncs] += "qnx_sdp_write_ifs_dropin"
 
-# Without these, editing QNX_IFS_STARTUP_CMD or QNX_IFS_EXTRA_ENTRIES would not
-# invalidate do_install, and the change would silently not reach the image.
+# Without these, editing any of the drop-in inputs would not invalidate
+# do_install, and the change would silently not reach the image.
 qnx_sdp_write_ifs_dropin[vardeps] += "QNX_IFS_AUTO_ENTRIES QNX_IFS_STARTUP_CMD \
-                                      QNX_IFS_EXTRA_ENTRIES QNX_IFS_SEARCHABLE_DIRS"
+                                      QNX_IFS_EXTRA_ENTRIES QNX_IFS_SEARCHABLE_DIRS \
+                                      QNX_IFS_STARTUP_PRIORITY QNX_IFS_STARTUP_WAITFOR \
+                                      QNX_IFS_STARTUP_WAITFOR_TIMEOUT"
