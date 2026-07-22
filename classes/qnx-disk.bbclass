@@ -57,6 +57,12 @@ QNX_DISK_SIZE ?= "auto"
 # filesystem needs room for its own metadata, and a data partition that is
 # exactly the size of its contents is useless at runtime.
 QNX_DISK_SLACK_PERCENT ?= "25"
+
+# An auto-sized partition that does not fit is grown and retried, because the
+# real overhead of a filesystem is not predictable from a byte count. See
+# build_partition() in do_compile.
+QNX_DISK_GROW_ATTEMPTS ?= "5"
+QNX_DISK_GROW_FACTOR ?= "1.5"
 QNX_DISK_BOOT_MIN ?= "32M"
 QNX_DISK_DATA_MIN ?= "64M"
 
@@ -188,14 +194,84 @@ python do_generate_diskfiles() {
 }
 addtask generate_diskfiles after do_configure before do_compile
 
-do_compile() {
-	cd ${B}
+python do_compile() {
+    import os
+    import re
+    import subprocess
 
-	mkfatfsimg ${B}/boot.build ${B}/part-boot.img
+    b = d.getVar('B')
 
-	if [ -f ${B}/data.build ]; then
-		mkqnx6fsimg ${B}/data.build ${B}/part-data.img
-	fi
+    def run(tool, buildfile, out):
+        proc = subprocess.run([tool, buildfile, out], capture_output=True,
+                              text=True, cwd=b)
+        return proc.returncode, (proc.stdout or '') + (proc.stderr or '')
+
+    def build_partition(tool, buildfile, out, marker, auto):
+        """Run a filesystem image tool, growing the image if it does not fit.
+
+        A byte count is a poor predictor of how large a filesystem must be:
+        mkfatfsimg needs far more than its contents (a hand-tuned QNX BSP
+        typically reserves several times the payload), and the overhead depends
+        on cluster size and file count rather than scaling cleanly. Rather than
+        pick a fudge factor that is wrong for somebody else's image, an
+        auto-sized partition retries at a larger size until it fits.
+
+        An explicitly sized partition never grows: if you asked for 200M you
+        want to be told it does not fit, not to silently get 400M."""
+        attempts = int(d.getVar('QNX_DISK_GROW_ATTEMPTS') or '5')
+        factor = float(d.getVar('QNX_DISK_GROW_FACTOR') or '1.5')
+
+        for attempt in range(attempts):
+            rc, output = run(tool, buildfile, out)
+            if rc == 0:
+                return
+
+            # Deliberately not keyed on the "No space left in image" text.
+            # mkfatfsimg prints that to stderr when run from a shell, but it
+            # does not reliably reach a captured pipe, so keying on it made the
+            # retry silently never happen. Any failure of an auto-sized
+            # partition is treated as "too small" and retried; a failure with a
+            # different cause still surfaces, with its own output, once the
+            # attempts run out.
+            if not auto:
+                bb.fatal("%s failed on %s:\n%s"
+                         % (tool, buildfile, output.strip() or '(no output)'))
+
+            with open(buildfile) as f:
+                text = f.read()
+            # Anchored to the start of a line: a template may well *mention*
+            # [num_sectors=...] in a comment (they usually explain the
+            # hand-maintained value they replace), and rewriting the comment
+            # instead of the directive is a silent no-op that looks like the
+            # tool ignoring the retry.
+            match = re.search(r'^\[num_sectors=(\d+)\]', text, re.M)
+            if not match:
+                bb.fatal("%s failed on %s and it has no [num_sectors=...] to "
+                         "grow:\n%s"
+                         % (tool, buildfile, output.strip() or '(no output)'))
+
+            old = int(match.group(1))
+            new = int(old * factor)
+            new += new % 8            # mkqnx6fsimg wants a multiple of 8
+            bb.note("%s did not fit in %d sectors; retrying with %d"
+                    % (os.path.basename(out), old, new))
+            with open(buildfile, 'w') as f:
+                f.write(text.replace(match.group(0), '[num_sectors=%d]' % new))
+
+        bb.fatal("%s still fails after %d attempts at growing it. Either set an "
+                 "explicit size, or look at the last failure:\n%s"
+                 % (out, attempts, output.strip() or '(no output)'))
+
+    boot_auto = (d.getVar('QNX_DISK_BOOT_SIZE') or 'auto').strip() == 'auto'
+    build_partition('mkfatfsimg', os.path.join(b, 'boot.build'),
+                    os.path.join(b, 'part-boot.img'),
+                    'QNX_DISK_BOOT_SECTORS', boot_auto)
+
+    if os.path.isfile(os.path.join(b, 'data.build')):
+        data_auto = (d.getVar('QNX_DISK_DATA_SIZE') or 'auto').strip() == 'auto'
+        build_partition('mkqnx6fsimg', os.path.join(b, 'data.build'),
+                        os.path.join(b, 'part-data.img'),
+                        'QNX_DISK_DATA_SECTORS', data_auto)
 }
 
 python do_generate_diskcfg() {

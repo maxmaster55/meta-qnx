@@ -142,7 +142,25 @@ python do_generate_buildfile() {
             path = os.path.join(dropin_dir, pn + suffix)
             if os.path.isfile(path):
                 with open(path) as f:
-                    out.append((index, pn, f.read().rstrip('\n')))
+                    text = f.read().rstrip('\n')
+
+                # @VARIABLE@ markers in a fragment are expanded here, in the
+                # image's context rather than the contributing recipe's. That is
+                # what lets a recipe refer to @QNX_IFS_ROOT@ -- the search root
+                # mkifs is given -- which it cannot know itself, since the path
+                # belongs to whichever image installs it. Expanding after
+                # insertion would not work: the template substitution does not
+                # rescan the text it has just inserted.
+                def expand_fragment(match, pn=pn):
+                    name = match.group(1)
+                    value = d.getVar(name)
+                    if value is None:
+                        bb.fatal("%s: fragment from '%s' references @%s@, which "
+                                 "is not set" % (d.getVar('PN'), pn, name))
+                    return value
+
+                text = re.sub(r'@([A-Z][A-Z0-9_]*)@', expand_fragment, text)
+                out.append((index, pn, text))
         return out
 
     files = '\n'.join(text for _, _, text in read_dropins('.files'))
