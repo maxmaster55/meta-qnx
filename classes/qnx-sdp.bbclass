@@ -232,9 +232,50 @@ QNX_IFS_STARTUP_WAITFOR ?= ""
 # guest build files.
 QNX_IFS_STARTUP_WAITFOR_TIMEOUT ?= "5"
 
-# Raw mkifs lines for anything the automatic pass cannot express: permissions,
-# uid/gid, symlinks, inline config files, [search=...] for unusual locations.
+# Raw mkifs lines, for entries that have no staged file behind them: symlinks
+# into /tmp or /dev, inline config file bodies, [search=...] for unusual
+# locations. Newlines may be written as a literal \n -- bitbake does not process
+# escape sequences in variable values, so there is otherwise no way to express a
+# multi-line value.
 QNX_IFS_EXTRA_ENTRIES ?= ""
+
+# ---------------------------------------------------------------------------
+# Per-entry mkifs attributes
+# ---------------------------------------------------------------------------
+# mkifs takes attributes in brackets before a record -- [uid=0 gid=0 perms=4755]
+# and about thirty others (type, prefix, search, data, filter, cksum, sha256,
+# chain, module, mtime, dperms, keepsection, ...).
+#
+# Rather than model each one, the value is passed through verbatim, keyed by the
+# staged file's basename. Every record attribute mkifs supports is therefore
+# reachable, including any added in a future SDP:
+#
+#     QNX_IFS_ATTR[rpi_gpio] = "uid=0 gid=0 perms=4755"
+#     QNX_IFS_ATTR[tool]     = "data=copy"
+#
+# Basenames, not paths: bitbake varflag names may only contain [a-zA-Z0-9-_+.@],
+# so QNX_IFS_ATTR[/sbin/rpi_gpio] is a parse error rather than a failed lookup.
+#
+# Attributes that describe the image rather than a record (image, virtual, ram,
+# pagesize, cpu, physical, vboot) belong to the boot environment and are set as
+# template @VARIABLE@s on the image recipe instead -- see qnx-ifs.bbclass.
+QNX_IFS_ATTR[dummy] ?= ""
+
+# Applied to every entry this recipe contributes, before any per-entry value.
+QNX_IFS_DEFAULT_ATTR ?= ""
+
+# Override where a staged file lands in the image, when the path derived from
+# the stage tree is not what you want. Keyed by basename, value is the full
+# destination path:
+#
+#     QNX_IFS_DEST[myapp] = "/proc/boot/myapp"
+QNX_IFS_DEST[dummy] ?= ""
+
+# Varflags do not participate in task signatures, so a change to QNX_IFS_ATTR or
+# QNX_IFS_DEST would not invalidate do_install and would silently fail to reach
+# the image. These serialise the flags into ordinary variables that do.
+QNX_IFS_ATTR_SIG = "${@qnx_ifs_flags_repr(d, 'QNX_IFS_ATTR')}"
+QNX_IFS_DEST_SIG = "${@qnx_ifs_flags_repr(d, 'QNX_IFS_DEST')}"
 
 # mkifs resolves a bare source name against its search path, which `-r <root>`
 # re-roots onto our stage tree. Only these directories are on that path, so only
@@ -248,6 +289,20 @@ QNX_IFS_SEARCHABLE_DIRS ?= "bin sbin lib usr/bin usr/sbin usr/lib lib/dll boot/s
 QNX_IFS_EXCLUDE_DIRS ?= "usr/include include"
 QNX_IFS_EXCLUDE_SUFFIXES ?= ".a .la .pc .h .hpp"
 
+def qnx_ifs_flags(d, varname):
+    """Varflags of varname, minus bitbake's own bookkeeping.
+
+    getVarFlags returns internal flags ("doc", "export", the ?= placeholder)
+    alongside the ones a recipe set, and those must not be mistaken for entries."""
+    flags = d.getVarFlags(varname) or {}
+    return {k: v for k, v in flags.items()
+            if not k.startswith('_') and k not in ('doc', 'export', 'dummy',
+                                                   'vardeps', 'vardepsexclude',
+                                                   'vardepvalue')}
+
+def qnx_ifs_flags_repr(d, varname):
+    return repr(sorted(qnx_ifs_flags(d, varname).items()))
+
 python qnx_sdp_write_ifs_dropin() {
     import os
 
@@ -255,6 +310,30 @@ python qnx_sdp_write_ifs_dropin() {
     proc = d.getVar('QNX_PROCESSOR')
     stage_root = os.path.join(destdir + d.getVar('QNX_STAGE_DIR'), proc)
     pn = d.getVar('PN')
+
+    attr_map = qnx_ifs_flags(d, 'QNX_IFS_ATTR')
+    dest_map = qnx_ifs_flags(d, 'QNX_IFS_DEST')
+    default_attr = (d.getVar('QNX_IFS_DEFAULT_ATTR') or '').strip()
+    used_attrs = set()
+    used_dests = set()
+
+    def record(key, ifs_dest, source, extra_attr=''):
+        """One mkifs record: [attributes] destination=source.
+
+        `key` is the staged file's basename. bitbake varflag names may only
+        contain [a-zA-Z0-9-_+.@], so a full path cannot be used as a key --
+        QNX_IFS_ATTR[/bin/foo] is a parse error, not a lookup that fails."""
+        if key in dest_map and dest_map[key].strip():
+            used_dests.add(key)
+            ifs_dest = dest_map[key].strip()
+
+        parts = [p for p in (default_attr, extra_attr) if p]
+        if attr_map.get(key, '').strip():
+            used_attrs.add(key)
+            parts.append(attr_map[key].strip())
+
+        prefix = '[%s] ' % ' '.join(parts) if parts else ''
+        return '%s%s=%s' % (prefix, ifs_dest, source)
 
     entries = []
 
@@ -283,18 +362,36 @@ python qnx_sdp_write_ifs_dropin() {
                     # libfoo.so -> libfoo.so.1 -> libfoo.so.1.2.3. Emitting a
                     # symlink as a plain entry would silently duplicate the
                     # payload once per name.
-                    entries.append('[type=link] %s=%s'
-                                   % (ifs_dest, os.readlink(full)))
+                    entries.append(record(name, ifs_dest, os.readlink(full),
+                                          extra_attr='type=link'))
                 elif reldir in searchable:
                     # e.g. aarch64le/bin/qnx-hello  ->  /bin/qnx-hello=qnx-hello
-                    entries.append('%s=%s' % (ifs_dest, name))
+                    entries.append(record(name, ifs_dest, name))
                 else:
                     bb.warn("%s: %s/%s is outside the mkifs search path (%s). "
                             "It will not be added to images automatically; add an "
                             "explicit entry via QNX_IFS_EXTRA_ENTRIES."
                             % (pn, reldir or '.', name, ' '.join(searchable)))
 
-    extra = (d.getVar('QNX_IFS_EXTRA_ENTRIES') or '').strip()
+    # bitbake stores variable values literally -- "a\nb" keeps the backslash and
+    # the n, and a line continuation collapses to a space -- so there is no way
+    # to write a multi-line value. Translate the literal escape into a real
+    # newline, otherwise mkifs sees several records run together on one line.
+    extra = (d.getVar('QNX_IFS_EXTRA_ENTRIES') or '').replace('\\n', '\n').strip()
+
+    # A key that matched nothing is a typo, and would otherwise be silently
+    # ignored: the file keeps its default permissions or its original location
+    # and nothing says why.
+    for key in sorted(set(attr_map) - used_attrs):
+        if attr_map[key].strip():
+            bb.warn("%s: QNX_IFS_ATTR[%s] matched no staged file. Expected a "
+                    "basename, e.g. the name as installed into "
+                    "${QNX_STAGE_BINDIR}." % (pn, key))
+    for key in sorted(set(dest_map) - used_dests):
+        if dest_map[key].strip():
+            bb.warn("%s: QNX_IFS_DEST[%s] matched no staged file. Expected a "
+                    "basename, e.g. the name as installed into "
+                    "${QNX_STAGE_BINDIR}." % (pn, key))
 
     if entries or extra:
         dropin_dir = destdir + d.getVar('QNX_IFS_DROPIN_DIR')
@@ -339,4 +436,6 @@ do_install[postfuncs] += "qnx_sdp_write_ifs_dropin"
 qnx_sdp_write_ifs_dropin[vardeps] += "QNX_IFS_AUTO_ENTRIES QNX_IFS_STARTUP_CMD \
                                       QNX_IFS_EXTRA_ENTRIES QNX_IFS_SEARCHABLE_DIRS \
                                       QNX_IFS_STARTUP_PRIORITY QNX_IFS_STARTUP_WAITFOR \
-                                      QNX_IFS_STARTUP_WAITFOR_TIMEOUT"
+                                      QNX_IFS_STARTUP_WAITFOR_TIMEOUT \
+                                      QNX_IFS_DEFAULT_ATTR \
+                                      QNX_IFS_ATTR_SIG QNX_IFS_DEST_SIG"

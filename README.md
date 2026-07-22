@@ -131,10 +131,34 @@ Note the links use an absolute target (`/bin/ls -> /usr/bin/toybox`). The SDP do
 bare `=toybox`, but a symlink target without a leading slash resolves relative to the
 link's own directory, so `/bin/ls` would look for a non-existent `/bin/toybox`.
 
-Escape hatches, for recipes the automatic pass cannot describe:
+### mkifs attributes
 
-- `QNX_IFS_EXTRA_ENTRIES` — raw mkifs lines for permissions, uid/gid, symlinks, inline
-  config files, `[search=...]`
+mkifs takes attributes in brackets before a record — `[uid=0 gid=0 perms=4755]` and about
+thirty others (`type`, `prefix`, `search`, `data`, `filter`, `cksum`, `sha256`, `chain`,
+`module`, `mtime`, `dperms`, `keepsection`, …). Rather than model each one, the value is
+**passed through verbatim**, so every record attribute is reachable — including any a
+future SDP adds:
+
+```bitbake
+QNX_IFS_ATTR[rpi_gpio] = "uid=0 gid=0 perms=4755"
+QNX_IFS_DEFAULT_ATTR = "uid=0 gid=0"          # applied to all of this recipe's entries
+QNX_IFS_DEST[myapp] = "/proc/boot/myapp"      # override the derived destination
+```
+
+Keys are **basenames, not paths**: bitbake varflag names may only contain
+`[a-zA-Z0-9-_+.@]`, so `QNX_IFS_ATTR[/sbin/rpi_gpio]` is a parse error rather than a lookup
+that quietly fails. A key matching no staged file warns.
+
+Attributes describing the *image* rather than a record (`image`, `virtual`, `ram`,
+`pagesize`, `cpu`, `physical`, `vboot`) belong to the boot environment — set them as
+template `@VARIABLE@`s, see [Describing an image](#describing-an-image).
+
+Escape hatches, for entries with no staged file behind them:
+
+- `QNX_IFS_EXTRA_ENTRIES` — raw mkifs lines for symlinks into `/tmp` or `/dev`, inline
+  config bodies, `[search=...]`. Multiple entries are separated by a literal `\n`:
+  bitbake does not process escape sequences in variable values, so there is otherwise no
+  way to write a multi-line value (a line continuation collapses to a space).
 - `QNX_IFS_AUTO_ENTRIES = "0"` — spell out every entry by hand
 
 Beyond that, dependency tracking falls out for free. In a makefile-driven QNX build,
