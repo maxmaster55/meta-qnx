@@ -22,21 +22,29 @@ Set these in `conf/local.conf`.
 
 ### `QNX_SDP_ROOT`
 
-**Default:** *(unset — required)*
+**Default:** `${TOPDIR}/qnx-sdp`
 
-Path to the QNX SDP install. Used strictly read-only.
+Path to the QNX SDP install. Used **strictly read-only** by every build; only
+`bitbake -c install_sdp qnx-sdp` ever writes to it.
 
-Recipes are **skipped** with an explanatory message if this is unset, or if the path has
-no `target/qnx` beneath it. That is deliberate: a missing SDP should say so by name, not
-surface as `qcc: command not found` halfway through `do_compile`.
+Defaults inside the build directory in the same spirit as `DL_DIR` and `SSTATE_DIR`, so a
+fresh build directory works with no configuration and `install_sdp` creates an SDP there.
+Point it at an existing install to use one you already have:
 
 ```bitbake
 QNX_SDP_ROOT = "/home/you/qnx800"
 ```
 
+Recipes are **skipped** with an explanatory message when the path does not contain a
+`target/qnx`. That is deliberate: a missing SDP should say so by name, not surface as
+`qcc: command not found` halfway through `do_compile`.
+
+The default lives in `conf/layer.conf` rather than a class, so that both the build classes
+and the SDP installer — which must work *before* any SDP exists — see the same value.
+
 ### `QNX_PROJECT_SRC`
 
-**Default:** `""`
+**Default:** `""` (also set in `conf/layer.conf`)
 
 Root of a working tree containing application sources, for recipes inheriting
 `qnx-project-src`. Recipes that need it are skipped when it is unset, so the layer still

@@ -21,20 +21,21 @@
 # ---------------------------------------------------------------------------
 # SDP location
 # ---------------------------------------------------------------------------
-# Set QNX_SDP_ROOT in local.conf (or site.conf) to your SDP install. There is no
-# sensible default, so fail early and by name rather than with a confusing
-# "qcc: command not found" halfway through do_compile.
-QNX_SDP_ROOT ??= ""
-
+# QNX_SDP_ROOT defaults to ${TOPDIR}/qnx-sdp in conf/layer.conf, like DL_DIR;
+# set it in local.conf to use an SDP you already have. Recipes are skipped with
+# an explanation when it does not point at one, rather than failing later with a
+# confusing "qcc: command not found" in the middle of do_compile.
 python () {
     sdp = d.getVar('QNX_SDP_ROOT')
     if not sdp:
         raise bb.parse.SkipRecipe(
-            "QNX_SDP_ROOT is not set. Point it at a QNX SDP install in local.conf, "
-            "e.g. QNX_SDP_ROOT = \"/path/to/qnx800\"")
+            "QNX_SDP_ROOT is empty. Set it in local.conf, e.g.\n"
+            '  QNX_SDP_ROOT = "/path/to/qnx800"')
     if not os.path.isdir(os.path.join(sdp, 'target', 'qnx')):
         raise bb.parse.SkipRecipe(
-            "QNX_SDP_ROOT '%s' does not look like a QNX SDP (no target/qnx)" % sdp)
+            "QNX_SDP_ROOT '%s' is not a QNX SDP (no target/qnx). Either point it "
+            "at an existing install in local.conf, or run "
+            "'bitbake -c install_sdp qnx-sdp' to create one there." % sdp)
 }
 
 QNX_HOST ?= "${QNX_SDP_ROOT}/host/linux/x86_64"

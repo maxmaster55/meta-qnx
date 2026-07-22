@@ -1,0 +1,52 @@
+# meta-qnx settings for conf/local.conf.
+#
+# Paste this into your build directory's conf/local.conf and adjust the paths.
+# Everything here has a default, so the only line you normally have to change is
+# QNX_SDP_ROOT.
+
+MACHINE = "qnx-aarch64le"
+
+# ---------------------------------------------------------------------------
+# Paths
+# ---------------------------------------------------------------------------
+# The QNX SDP. Used strictly read-only by every build; only `bitbake -c
+# install_sdp qnx-sdp` ever writes to it.
+#
+# Defaults to ${TOPDIR}/qnx-sdp, in the same spirit as DL_DIR and SSTATE_DIR, so
+# a fresh build directory works with no configuration and install_sdp creates an
+# SDP there. Point it at an existing install to use one you already have:
+QNX_SDP_ROOT = "${TOPDIR}/qnx-sdp"
+
+# Working tree holding application sources, for recipes that build one in place
+# via externalsrc. Leave unset if you have none -- those recipes then simply do
+# not appear.
+#QNX_PROJECT_SRC = "/path/to/your/qnx-project"
+
+# ---------------------------------------------------------------------------
+# SDP package management -- optional, see docs/sdp.md
+# ---------------------------------------------------------------------------
+# The QNX Software Center command-line tool. Needed only to check, search or
+# install SDP packages; builds do not use it.
+#QNX_QSC_CLT = "/path/to/qnxsoftwarecenter/qnxsoftwarecenter_clt"
+
+# The resolved package snapshot. An existing qsc_install_packages.list is
+# already in the right format and can be used unchanged.
+#QNX_SDP_LOCKFILE = "${QNX_PROJECT_SRC}/qsc_install_packages.list"
+
+# What the SDP should contain. See conf/qnx-sdp-features.inc for the full list.
+#QNX_SDP_FEATURES = "core toolchain utils networking hypervisor"
+
+# Image builds verify the SDP against the lockfile first. Set to "0" to skip.
+#QNX_SDP_CHECK = "1"
+
+# ---------------------------------------------------------------------------
+# Recommended
+# ---------------------------------------------------------------------------
+# uninative downloads a ~50MB glibc shim before anything can run, to make
+# Yocto's own native binaries portable across host distros. This layer builds no
+# native binaries, so it is a network dependency for zero benefit -- and it is
+# what a build hangs on when the network is down.
+INHERIT:remove = "uninative"
+
+# Nothing here has a CVE database to check or an SBOM worth generating.
+INHERIT:remove = "create-spdx"

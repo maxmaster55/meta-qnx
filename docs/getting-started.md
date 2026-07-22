@@ -32,15 +32,23 @@ BBLAYERS ?= " \
 
 Nothing here needs `meta-openembedded`, `meta-raspberrypi` or any BSP layer.
 
-Then in `conf/local.conf`:
+Then in `conf/local.conf`. A ready-made block is in
+[`conf/local.conf.sample`](../conf/local.conf.sample) — paste it and adjust the paths:
 
 ```bitbake
 MACHINE = "qnx-aarch64le"
+
+# Where the SDP is. Defaults to ${TOPDIR}/qnx-sdp, in the same spirit as DL_DIR
+# and SSTATE_DIR, so this line is only needed to use an SDP you already have.
 QNX_SDP_ROOT = "/path/to/qnx800"
 
 # Optional: only needed for recipes that build a working tree in place.
 QNX_PROJECT_SRC = "/path/to/your/qnx-project"
 ```
+
+Do not have an SDP yet? Leave `QNX_SDP_ROOT` alone and run
+`bitbake -c install_sdp qnx-sdp` to create one in the build directory — see
+[sdp.md](sdp.md).
 
 ### Two settings worth turning off
 
