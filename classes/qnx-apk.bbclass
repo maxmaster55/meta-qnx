@@ -40,13 +40,24 @@ S = "${WORKDIR}/${QNX_APK_NAME}-${QNX_APK_VERSION}"
 # ---------------------------------------------------------------------------
 # Licence
 # ---------------------------------------------------------------------------
-# A QNX apk carries no licence file, only a "license =" line in its .PKGINFO.
-# That is the authoritative statement in the archive, so it is what
-# LIC_FILES_CHKSUM points at by default. The md5 is per-package, so a recipe
-# sets it -- either directly, or through QNX_APK_PKGINFO_MD5, which is the same
-# thing spelled so the recipe does not have to repeat "file://.PKGINFO;md5=".
-QNX_APK_PKGINFO_MD5 ?= ""
-LIC_FILES_CHKSUM ?= "${@('file://.PKGINFO;md5=' + d.getVar('QNX_APK_PKGINFO_MD5')) if d.getVar('QNX_APK_PKGINFO_MD5') else ''}"
+# A QNX apk carries no licence file -- only a "license =" line in its .PKGINFO --
+# so there is nothing for LIC_FILES_CHKSUM to point at. Normally that trips the
+# "fetches files and does not have license file information" QA check, which is
+# what would otherwise force a recipe to dig an md5 out of the archive.
+#
+# It is dropped here rather than satisfied, because the .apk's own sha256sum
+# already covers every byte in the archive, .PKGINFO included: a change to the
+# licence metadata changes the .apk checksum. A second checksum on a file inside
+# it would be pure redundant boilerplate. So a recipe states LICENSE (the human
+# fact) and the .apk's sha256 (the reproducibility fact), and nothing else.
+ERROR_QA:remove = "license-checksum"
+WARN_QA:remove = "license-checksum"
+
+# These packages carry a bespoke licence name (LicenseRef-QDL-*) with no generic
+# text file behind it, which trips "No generic license file exists for ...". The
+# licence is recorded in LICENSE and gated by LICENSE_FLAGS; there is no text to
+# point at, so the check has nothing to do here.
+WARN_QA:remove = "license-exists"
 
 # Most of these packages are non-commercial (LicenseRef-QDL-Non-Commercial), so
 # they are gated behind a licence flag by default: shipping one is then an

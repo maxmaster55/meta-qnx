@@ -358,27 +358,45 @@ LICENSE = "LicenseRef-QDL-Non-Commercial"
 inherit qnx-apk
 
 SRC_URI[sha256sum] = "<sha256 of the .apk>"
-QNX_APK_PKGINFO_MD5 = "<md5 of the .PKGINFO inside it>"
 ```
+
+That is the whole recipe. Name and version come from the filename, so the only
+per-package facts are the licence and one checksum.
 
 Name and version come from the recipe filename; the architecture from the
 machine; the repository channel defaults to `8.0.4/qnx-extra` and is overridden
 with `QNX_OSS_CHANNEL` for a package served elsewhere (`8.0.3/core`,
 `8.0.3/extra`, `8.0.4/qnx-core`).
 
-Getting the checksums first time is the usual bitbake loop: leave
-`SRC_URI[sha256sum]` out, run `bitbake -c fetch <recipe>`, and it prints the
-value to paste back. For the `.PKGINFO` md5, extract once and `md5sum` it.
+### Where the checksum comes from
+
+You do not hunt for it. Write the recipe without the `SRC_URI[sha256sum]` line,
+run `bitbake -c fetch <recipe>`, and bitbake downloads the `.apk`, hashes it, and
+prints the exact line to paste:
+
+```
+ERROR: ... Missing SRC_URI checksum, please add those to the recipe:
+SRC_URI[sha256sum] = "97938cf4fed1ca463c5dd50f533a0e4deeba110361666bfd35619a498326b6cc"
+```
+
+That is the standard OpenEmbedded loop for any new source, and it is the only
+checksum this class needs.
+
+> **Do not use the "Package Checksum" from the QNX Open-Source Dashboard.** That
+> value is the package's `datahash` — the sha256 of the *uncompressed* payload —
+> not the sha256 of the `.apk` file bitbake downloads. They are different by
+> construction and it will not verify. Let bitbake print the right one.
 
 The whole payload is staged under `${QNX_PROCESSOR}/`, mirroring where it lives
 on the target; the `.PKGINFO`/`.SIGN`/`.BUILDINFO` metadata is left out. Override
 `do_install` for a package that needs a different layout.
 
-> **Two things you cannot omit.** The `.apk`'s sha256 (a binary fetched without a
-> checksum is neither reproducible nor safe) and the licence. Most of these
-> packages are `LicenseRef-QDL-Non-Commercial`, so `qnx-apk` gates them behind a
-> `qnx-non-commercial` licence flag — accept it in `local.conf`:
-> `LICENSE_FLAGS_ACCEPTED += "qnx-non-commercial"`.
+The licence needs no checksum. A QNX apk has no licence file, only a `license =`
+line in its `.PKGINFO`, and that is already covered by the `.apk` sha256 -- so
+the class drops the usual "no licence file" QA rather than making you dig an md5
+out of the archive. Most of these packages are `LicenseRef-QDL-Non-Commercial`,
+which `qnx-apk` gates behind a licence flag: accept it in `local.conf` with
+`LICENSE_FLAGS_ACCEPTED += "qnx-non-commercial"`.
 
 ## A flashable SD card image
 
