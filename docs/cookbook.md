@@ -15,6 +15,7 @@ real recipe in this layer or in `meta-qnx-hyp`.
 - [Putting a file somewhere unusual](#putting-a-file-somewhere-unusual)
 - [A new image](#a-new-image)
 - [A board that needs binaries the SDP lacks](#a-board-that-needs-binaries-the-sdp-lacks)
+- [A prebuilt QNX OSS package](#a-prebuilt-package-from-qnxs-oss-repository)
 - [A flashable SD card image](#a-flashable-sd-card-image)
 - [Debugging what ended up in an image](#debugging-what-ended-up-in-an-image)
 
@@ -344,6 +345,40 @@ Nested directories need a subpath, because the search path is flat — `lib/dll`
 ```
 /lib/dll/pci/pci_slog2.so=pci/pci_slog2.so
 ```
+
+## A prebuilt package from QNX's OSS repository
+
+QNX ships open-source packages as `.apk` files at repo.oss.qnx.com. `qnx-apk`
+fetches, extracts and stages one from little more than its name:
+
+```bitbake
+SUMMARY = "..."
+LICENSE = "LicenseRef-QDL-Non-Commercial"
+
+inherit qnx-apk
+
+SRC_URI[sha256sum] = "<sha256 of the .apk>"
+QNX_APK_PKGINFO_MD5 = "<md5 of the .PKGINFO inside it>"
+```
+
+Name and version come from the recipe filename; the architecture from the
+machine; the repository channel defaults to `8.0.4/qnx-extra` and is overridden
+with `QNX_OSS_CHANNEL` for a package served elsewhere (`8.0.3/core`,
+`8.0.3/extra`, `8.0.4/qnx-core`).
+
+Getting the checksums first time is the usual bitbake loop: leave
+`SRC_URI[sha256sum]` out, run `bitbake -c fetch <recipe>`, and it prints the
+value to paste back. For the `.PKGINFO` md5, extract once and `md5sum` it.
+
+The whole payload is staged under `${QNX_PROCESSOR}/`, mirroring where it lives
+on the target; the `.PKGINFO`/`.SIGN`/`.BUILDINFO` metadata is left out. Override
+`do_install` for a package that needs a different layout.
+
+> **Two things you cannot omit.** The `.apk`'s sha256 (a binary fetched without a
+> checksum is neither reproducible nor safe) and the licence. Most of these
+> packages are `LicenseRef-QDL-Non-Commercial`, so `qnx-apk` gates them behind a
+> `qnx-non-commercial` licence flag — accept it in `local.conf`:
+> `LICENSE_FLAGS_ACCEPTED += "qnx-non-commercial"`.
 
 ## A flashable SD card image
 

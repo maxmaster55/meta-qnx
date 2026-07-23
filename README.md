@@ -85,6 +85,7 @@ Full instructions in [docs/getting-started.md](docs/getting-started.md).
 | `classes/qnx-project-src.bbclass` | Builds an application working tree in place via `externalsrc`. |
 | `classes/qnx-disk.bbclass` | FAT + QNX6 partitions wrapped in an MBR: a flashable `.img`, sized automatically. |
 | `classes/qnx-sdp-packages.bbclass` | Feature-to-package resolution and lockfile handling for the SDP. |
+| `classes/qnx-apk.bbclass` | Fetch, extract and stage a prebuilt package from QNX's OSS repository. |
 | `recipes-sdp/qnx-sdp/` | Tasks to check, search, resolve and install SDP packages. |
 | `conf/machine/qnx-aarch64le.conf` | Thin machine: no kernel, no bootloader, no rootfs. |
 | `conf/qnx-sdp-features.inc` | Feature definitions: names mapped to package id patterns. |
