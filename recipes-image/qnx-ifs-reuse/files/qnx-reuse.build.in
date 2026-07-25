@@ -1,0 +1,65 @@
+################################################################################
+## QNX IFS built from stock Yocto recipes -- TEMPLATE.
+##
+## Two things are being demonstrated here at once, and the file is short because
+## of it.
+##
+## 1. EVERY application in this image comes from a layer nobody here wrote.
+##    There is no entry below for bzip2: qnx-toolchain.bbclass built it with qcc
+##    and wrote its mkifs fragment, and the generated applications section picks
+##    that up exactly as it does for a recipe from meta-qnx. See
+##    docs/reusing-layers.md.
+##
+## 2. Almost nothing in this file is specific to this image. The boot header,
+##    the startup preamble and the base utilities are shared fragments that the
+##    hypervisor host and guest images include too.
+##
+## What is left is the handful of lines that genuinely describe *this* image:
+## which console it opens, and the banner it prints.
+##
+## NOTE: never name a marker in a comment -- not even to explain one. Expansion
+## is textual and does not know what a comment is, so the marker is substituted
+## there too, which drops a few hundred file records into the middle of a
+## sentence and yields the splendidly opaque "Improper filename specification".
+## An unknown name is caught instead, which is why this paragraph describes the
+## syntax rather than spelling it out.
+################################################################################
+
+#include qnx-boot.build.inc
+
+[+script] startup-script = {
+#include qnx-startup-preamble.build.inc
+
+    # virtio-console, matching the guest qvmconf this is normally run under:
+    #   vdev virtio-console / intr gic:42
+    devc-virtio 0x20000000,42
+    waitfor /dev/vcon1 4
+    reopen /dev/vcon1
+
+    display_msg " "
+    ksh -c "echo bzip2 came from oe-core, unmodified:"
+    ksh -c "bzip2 --help 2>&1 | head -1"
+    display_msg " "
+
+    ############################################################################
+    ## Contributed by QNX_IFS_STARTUP_CMD of each installed recipe.
+    ############################################################################
+@QNX_IFS_STARTUP@
+
+    display_msg "Starting shell ..."
+    [+session] ksh &
+}
+
+[uid=0 gid=0]
+
+################################################################################
+## Everything installed -- generated from QNX_IFS_INSTALL. The stock recipes'
+## entries name their source by absolute path into this image's sysroot, because
+## /usr/bin and /usr/lib are on no mkifs search path; the fragments say
+## @QNX_IFS_SYSROOT@ and qnx-ifs.bbclass expands it here.
+################################################################################
+@QNX_IFS_FILES@
+
+/sbin/devc-virtio=devc-virtio
+
+#include qnx-base.build.inc
