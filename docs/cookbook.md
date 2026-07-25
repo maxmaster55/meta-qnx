@@ -3,6 +3,12 @@
 Worked examples, roughly in order of increasing complexity. Every one of these is either a
 real recipe in this layer or in `meta-qnx-hyp`.
 
+> These are patterns for things you **build**. If what you need already exists — a QNX
+> component, a board driver, or an open-source package QNX publishes — see
+> [where-things-come-from.md](where-things-come-from.md) first; writing a recipe may not be
+> the answer. For a narrative tour rather than a reference, see
+> [showcase.md](showcase.md).
+
 - [A hello-world application](#a-hello-world-application)
 - [Adding it to an image](#adding-it-to-an-image)
 - [An application with a makefile](#an-application-with-a-makefile)
@@ -620,7 +626,7 @@ bitbake -c generate_buildfile my-image  # regenerate without running mkifs
 
 | Message | Meaning |
 | --- | --- |
-| `Host file 'x' not available` | mkifs could not find `x` in any `-r` root or `$QNX_TARGET`. If it is `ls`/`cat`/`uname`, that is toybox — see `QNX_IFS_TOYBOX_CMDS`. |
+| `Host file 'x' not available` | mkifs could not find `x` in any `-r` root or `$QNX_TARGET`. If it is `ls`/`cat`/`uname`, that is toybox — see `QNX_IFS_TOYBOX_CMDS`. Otherwise work out which of the four sources it should come from: [where-things-come-from.md](where-things-come-from.md). |
 | `'x' is in QNX_IFS_INSTALL but contributes nothing` | typo, or a recipe that never installed into `${QNX_STAGE_DIR}` |
 | `QNX_IFS_ATTR[x] matched no staged file` | key is not a staged basename |
 | `... is outside the mkifs search path` | staged somewhere mkifs cannot find by bare name; use `QNX_IFS_EXTRA_ENTRIES` |

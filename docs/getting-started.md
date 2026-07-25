@@ -148,5 +148,10 @@ comes from the SDP.
 
 ## Where to go next
 
+- [showcase.md](showcase.md) — **a tour of every feature**, building up from one binary to a
+  flashable disk carrying a hypervisor host and a guest. Start here if you want to see what
+  the layer actually does.
+- [where-things-come-from.md](where-things-come-from.md) — the four sources QNX components
+  arrive through, and which one you need when something is missing
 - [variables.md](variables.md) — every variable, with defaults
 - [cookbook.md](cookbook.md) — worked examples: applications, libraries, drivers, images

@@ -5,6 +5,8 @@ image filesystems (IFS) with `mkifs` — using bitbake as the build orchestrator
 
 **Documentation:**
 [Getting started](docs/getting-started.md) ·
+[Showcase](docs/showcase.md) — a tour of every feature ·
+[Where things come from](docs/where-things-come-from.md) ·
 [Variable reference](docs/variables.md) ·
 [Cookbook](docs/cookbook.md) ·
 [Reusing normal Yocto layers](docs/reusing-layers.md) ·

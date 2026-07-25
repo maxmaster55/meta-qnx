@@ -4,6 +4,10 @@ The SDP is not built by Yocto — it is installed by QNX's own
 `qnxsoftwarecenter_clt` from QNX's servers. What this layer adds is a way to say
 *what* should be in it, check that it is, and make it so.
 
+> The SDP is only one of the four places QNX components come from. If you are not
+> sure whether what you need is even in it, start at
+> [where-things-come-from.md](where-things-come-from.md).
+
 ## Intent vs. resolved
 
 The split follows `package.json` / `package-lock.json`:
