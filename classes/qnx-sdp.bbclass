@@ -17,6 +17,13 @@
 # mean patching siteinfo.bbclass and inventing a TCLIBC, for no gain.
 #
 # The SDP is treated as strictly READ-ONLY. Nothing in this layer writes to it.
+#
+# How a recipe gets itself into an image is NOT here: that is the drop-in
+# contract in qnx-image-contract.bbclass, which stock recipes built by
+# qnx-toolchain.bbclass use as well. All this class adds to it is the layout
+# those drop-ins are harvested from -- the stage tree, described below.
+
+inherit qnx-image-contract
 
 # ---------------------------------------------------------------------------
 # SDP location
@@ -124,7 +131,6 @@ COMPATIBLE_MACHINE = "qnx-aarch64le"
 # SYSROOT_DIRS makes the tree flow into a dependent recipe's RECIPE_SYSROOT via
 # a plain DEPENDS, which is what replaces the hand-rolled .build dependency
 # scraping in the makefile-based build.
-QNX_STAGE_DIR = "/qnx-stage"
 QNX_STAGE_BINDIR = "${QNX_STAGE_DIR}/${QNX_PROCESSOR}/bin"
 QNX_STAGE_SBINDIR = "${QNX_STAGE_DIR}/${QNX_PROCESSOR}/sbin"
 QNX_STAGE_LIBDIR = "${QNX_STAGE_DIR}/${QNX_PROCESSOR}/lib"
@@ -184,116 +190,124 @@ POPULATESYSROOTDEPS:class-nativesdk = ""
 INHIBIT_PACKAGE_STRIP = "1"
 
 # ---------------------------------------------------------------------------
-# IFS drop-ins -- how a recipe gets itself into an image
+# Getting into an image
 # ---------------------------------------------------------------------------
-# An image should never have to be edited to gain an application. On Linux you
-# add a package to IMAGE_INSTALL and its files appear; here the equivalent is
-# QNX_IFS_INSTALL (see qnx-ifs.bbclass), and this is the half that makes it work.
+# The drop-in contract itself (QNX_IFS_STARTUP_CMD, QNX_IFS_ATTR, the .files and
+# .startup fragments and the harvester that writes them) lives in
+# qnx-image-contract.bbclass, inherited above, because a stock recipe built by
+# qnx-toolchain.bbclass uses exactly the same contract.
 #
-# Every recipe drops a fragment of mkifs syntax into the stage tree describing
-# what it contributes to an image:
-#
-#   ${QNX_IFS_DROPIN_DIR}/${PN}.files     mkifs entries (one per staged file)
-#   ${QNX_IFS_DROPIN_DIR}/${PN}.startup   lines for the boot script, if any
-#
-# The image recipe concatenates the fragments of everything it installs into a
-# generated .build file. Same idea as an /etc/something.d directory: the app owns
-# its own entry, and the thing consuming it never enumerates its members.
-#
-# By default the .files fragment is derived automatically from whatever the
-# recipe installed, so a normal application recipe declares nothing at all.
-QNX_IFS_DROPIN_DIR = "${QNX_STAGE_DIR}/ifs.d"
+# All that is specific to a qnx-sdp recipe is *where* its files are and how an
+# entry names them. Our recipes install into the stage tree, whose layout is
+# already what `mkifs -r <root>` expects, so an entry can name its source by
+# bare name and let mkifs resolve it -- the same form the project's hand-written
+# .build files use, which is what keeps those files reusable verbatim.
+QNX_IMAGE_HARVEST_DIRS = "${QNX_STAGE_DIR}/${QNX_PROCESSOR}"
+QNX_IMAGE_SOURCE_STYLE = "search"
 
-# Set to "0" in a recipe that wants to spell out its entries by hand.
-QNX_IFS_AUTO_ENTRIES ?= "1"
+# The ELF check covers the whole stage tree, not just the harvested part: a
+# foreign binary under usr/include or in a subdirectory outside the search path
+# is just as wrong, and is exactly the case the check exists to catch.
+QNX_ELF_CHECK_DIRS = "${QNX_STAGE_DIR}"
 
-# Command(s) to run from the image's startup script, e.g. "my-daemon &".
-QNX_IFS_STARTUP_CMD ?= ""
-
-# Where in the boot sequence those commands run. Lower runs earlier.
-# Conventional bands, so unrelated recipes can be ordered without knowing about
-# each other:
-#
-#     100  hardware drivers, and anything providing a /dev entry
-#     300  resource managers and system services built on those
-#     500  applications (the default)
-#     700  anything wanting the system fully up
-#
-# Ties keep QNX_IFS_INSTALL order, so listing order stays a usable tiebreak.
-QNX_IFS_STARTUP_PRIORITY ?= "500"
-
-# Paths this component provides, waited on after its command is issued.
-#
-# Priority alone is not enough, and trusting it is a classic QNX boot race: the
-# startup script issues commands in order, but a driver started with '&' forks
-# and returns immediately, so the next command can easily run before the device
-# exists. `waitfor` is what actually blocks until it does -- the same idiom the
-# project's own build files use ("devb-virtio ..." followed by "waitfor /dev/hd0").
-#
-# Declared by the component that *provides* the path, so everything later in the
-# sequence is safe without having to know who to wait for.
-QNX_IFS_STARTUP_WAITFOR ?= ""
-
-# Seconds before giving up, matching "waitfor /dev/vcon1 4" in the project's
-# guest build files.
-QNX_IFS_STARTUP_WAITFOR_TIMEOUT ?= "5"
-
-# Raw mkifs lines, for entries that have no staged file behind them: symlinks
-# into /tmp or /dev, inline config file bodies, [search=...] for unusual
-# locations. Newlines may be written as a literal \n -- bitbake does not process
-# escape sequences in variable values, so there is otherwise no way to express a
-# multi-line value.
-QNX_IFS_EXTRA_ENTRIES ?= ""
+do_install[postfuncs] += "qnx_image_write_dropins qnx_image_check_elfs"
 
 # ---------------------------------------------------------------------------
-# Per-entry mkifs attributes
+# Template includes
 # ---------------------------------------------------------------------------
-# mkifs takes attributes in brackets before a record -- [uid=0 gid=0 perms=4755]
-# and about thirty others (type, prefix, search, data, filter, cksum, sha256,
-# chain, module, mtime, dperms, keepsection, ...).
+# Directories searched for `#include` fragments in a .build template, in order.
+# Each layer appends its own in conf/layer.conf, so a board layer can share a
+# fragment with an image layer without either knowing the other's path.
 #
-# Rather than model each one, the value is passed through verbatim, keyed by the
-# staged file's basename. Every record attribute mkifs supports is therefore
-# reachable, including any added in a future SDP:
-#
-#     QNX_IFS_ATTR[rpi_gpio] = "uid=0 gid=0 perms=4755"
-#     QNX_IFS_ATTR[tool]     = "data=copy"
-#
-# Basenames, not paths: bitbake varflag names may only contain [a-zA-Z0-9-_+.@],
-# so QNX_IFS_ATTR[/sbin/rpi_gpio] is a parse error rather than a failed lookup.
-#
-# Attributes that describe the image rather than a record (image, virtual, ram,
-# pagesize, cpu, physical, vboot) belong to the boot environment and are set as
-# template @VARIABLE@s on the image recipe instead -- see qnx-ifs.bbclass.
-QNX_IFS_ATTR[dummy] ?= ""
+# This is what stops a host and a guest image from being two copies of the same
+# 200-line build file: the parts that genuinely are the same -- the boot header,
+# the startup preamble, the base utilities -- live in one fragment that both
+# include, and each image keeps only what is actually different about it.
+QNX_TEMPLATE_INCLUDE_PATH ?= ""
 
-# Applied to every entry this recipe contributes, before any per-entry value.
-QNX_IFS_DEFAULT_ATTR ?= ""
 
-# Override where a staged file lands in the image, when the path derived from
-# the stage tree is not what you want. Keyed by basename, value is the full
-# destination path:
-#
-#     QNX_IFS_DEST[myapp] = "/proc/boot/myapp"
-QNX_IFS_DEST[dummy] ?= ""
+def qnx_template_includes(d):
+    """Every fragment on the include path, sorted.
 
-# Varflags do not participate in task signatures, so a change to QNX_IFS_ATTR or
-# QNX_IFS_DEST would not invalidate do_install and would silently fail to reach
-# the image. These serialise the flags into ordinary variables that do.
-QNX_IFS_ATTR_SIG = "${@qnx_ifs_flags_repr(d, 'QNX_IFS_ATTR')}"
-QNX_IFS_DEST_SIG = "${@qnx_ifs_flags_repr(d, 'QNX_IFS_DEST')}"
+    Used for do_*_buildfile[file-checksums], so editing a fragment rebuilds the
+    images that use it. Deliberately the whole path rather than the fragments a
+    given template actually pulls in: which ones those are is only known once
+    the task runs, and file-checksums has to be set at parse time. The cost of
+    the over-approximation is that editing an unused fragment rebuilds an image
+    that did not need it, which is cheap and safe in the direction that matters.
+    """
+    import os
 
-# mkifs resolves a bare source name against its search path, which `-r <root>`
-# re-roots onto our stage tree. Only these directories are on that path, so only
-# files installed into them can be referenced by bare name.
-QNX_IFS_SEARCHABLE_DIRS ?= "bin sbin lib usr/bin usr/sbin usr/lib lib/dll boot/sys"
+    found = []
+    for directory in (d.getVar('QNX_TEMPLATE_INCLUDE_PATH') or '').split():
+        if not os.path.isdir(directory):
+            continue
+        for name in os.listdir(directory):
+            path = os.path.join(directory, name)
+            if os.path.isfile(path):
+                found.append(path)
+    return sorted(found)
 
-# Staged content that belongs to the sysroot rather than to any image. Headers
-# and static libraries are build inputs for other recipes; putting them in an
-# IFS would only waste RAM. Excluded silently -- unlike an unexpected location,
-# this is not a mistake worth warning about.
-QNX_IFS_EXCLUDE_DIRS ?= "usr/include include"
-QNX_IFS_EXCLUDE_SUFFIXES ?= ".a .la .pc .h .hpp .cmake"
+
+def qnx_template_include_checksums(d):
+    return ' '.join('%s:True' % p for p in qnx_template_includes(d))
+
+
+def qnx_read_template(d, template, _trail=None):
+    """Read a template, resolving `#include` lines recursively.
+
+    A fragment is included by name:
+
+        #include qnx-base.build.inc
+
+    resolved against the including file's own directory first, then
+    QNX_TEMPLATE_INCLUDE_PATH. Angle brackets or quotes around the name are
+    accepted and ignored, so the C-ish spelling reads naturally.
+
+    The `#` is not an accident: mkifs treats the line as a comment, so a
+    template with includes in it is still a syntactically valid build file, and
+    the ones that never include anything are unaffected."""
+    import os
+    import re
+
+    if not os.path.isfile(template):
+        bb.fatal("template not found: %s" % template)
+
+    trail = _trail or ()
+    real = os.path.realpath(template)
+    if real in trail:
+        bb.fatal("template include cycle: %s"
+                 % ' -> '.join([os.path.basename(p) for p in trail] +
+                               [os.path.basename(real)]))
+
+    search = [os.path.dirname(real)]
+    search += (d.getVar('QNX_TEMPLATE_INCLUDE_PATH') or '').split()
+
+    out = []
+    with open(template) as f:
+        for lineno, line in enumerate(f, 1):
+            match = re.match(r'\s*#include\s+[<"]?([^>"\s]+)[>"]?\s*$', line)
+            if not match:
+                out.append(line)
+                continue
+
+            name = match.group(1)
+            for directory in search:
+                candidate = os.path.join(directory, name)
+                if os.path.isfile(candidate):
+                    break
+            else:
+                bb.fatal("%s:%d: cannot find included fragment '%s'. Searched:"
+                         "\n  %s\nAdd its directory to QNX_TEMPLATE_INCLUDE_PATH "
+                         "in the providing layer's conf/layer.conf."
+                         % (template, lineno, name, '\n  '.join(search)))
+
+            out.append('### >>> %s\n' % name)
+            out.append(qnx_read_template(d, candidate, trail + (real,)))
+            out.append('### <<< %s\n' % name)
+
+    return ''.join(out)
+
 
 def qnx_expand_template(d, template, generated=None):
     """Expand @VARIABLE@ markers in a template against the datastore.
@@ -302,17 +316,17 @@ def qnx_expand_template(d, template, generated=None):
     deliberately not used: QNX build files use ${...} for their own variables
     (${PROCESSOR}, ${QNX_TARGET}), and expanding those would corrupt them.
 
+    `#include` lines are resolved first, so a fragment may carry @VARIABLE@
+    markers of its own and they expand in the including image's context -- which
+    is the point of sharing one.
+
     `generated` supplies values computed at task time, which take precedence."""
     import re
     import os
 
-    if not os.path.isfile(template):
-        bb.fatal("template not found: %s" % template)
-
     generated = generated or {}
 
-    with open(template) as f:
-        content = f.read()
+    content = qnx_read_template(d, template)
 
     def expand(match):
         name = match.group(1)
@@ -342,153 +356,89 @@ def qnx_parse_size(text, what='size'):
                  "K/M/G suffix, or 'auto'" % (what, text))
 
 
-def qnx_ifs_flags(d, varname):
-    """Varflags of varname, minus bitbake's own bookkeeping.
+def qnx_sdp_task_env(d):
+    """The SDP environment a python task's subprocess needs.
 
-    getVarFlags returns internal flags ("doc", "export", the ?= placeholder)
-    alongside the ones a recipe set, and those must not be mistaken for entries."""
-    flags = d.getVarFlags(varname) or {}
-    return {k: v for k, v in flags.items()
-            if not k.startswith('_') and k not in ('doc', 'export', 'dummy',
-                                                   'vardeps', 'vardepsexclude',
-                                                   'vardepvalue')}
-
-def qnx_ifs_flags_repr(d, varname):
-    return repr(sorted(qnx_ifs_flags(d, varname).items()))
-
-python qnx_sdp_write_ifs_dropin() {
+    A python task inherits bitbake's own environment, not the one bitbake
+    generates for shell tasks, so the SDP variables and HOME that `export` puts
+    in a shell task are simply absent. Without them the licence check looks for
+    its lock file under the wrong home and reports a misleading error. Every
+    python task that shells out to an SDP tool builds its environment from here."""
     import os
+    env = dict(os.environ)
+    for var in ('HOME', 'QNX_HOST', 'QNX_TARGET', 'QNX_CONFIGURATION',
+                'QNX_CONFIGURATION_EXCLUSIVE', 'PATH', 'PROCESSOR', 'ARCH'):
+        value = d.getVar(var)
+        if value:
+            env[var] = value
+    return env
 
-    destdir = d.getVar('D')
-    proc = d.getVar('QNX_PROCESSOR')
-    stage_root = os.path.join(destdir + d.getVar('QNX_STAGE_DIR'), proc)
-    pn = d.getVar('PN')
 
-    attr_map = qnx_ifs_flags(d, 'QNX_IFS_ATTR')
-    dest_map = qnx_ifs_flags(d, 'QNX_IFS_DEST')
-    default_attr = (d.getVar('QNX_IFS_DEFAULT_ATTR') or '').strip()
-    used_attrs = set()
-    used_dests = set()
+def qnx_build_fsimg(d, tool, buildfile, out, auto, env, attempts=6, factor=1.5, cwd=None):
+    """Run a QNX filesystem-image tool, growing the image until it fits.
 
-    def record(key, ifs_dest, source, extra_attr=''):
-        """One mkifs record: [attributes] destination=source.
+    Shared by qnx-disk (host boot + data partitions) and qnx-rootfs (the guest
+    rootfs), because building a QNX filesystem image is one operation whichever
+    image wants it. `tool` is mkfatfsimg or mkqnx6fsimg.
 
-        `key` is the staged file's basename. bitbake varflag names may only
-        contain [a-zA-Z0-9-_+.@], so a full path cannot be used as a key --
-        QNX_IFS_ATTR[/bin/foo] is a parse error, not a lookup that fails."""
-        if key in dest_map and dest_map[key].strip():
-            used_dests.add(key)
-            ifs_dest = dest_map[key].strip()
+    A byte count is a poor predictor of how large a filesystem must be, so an
+    auto-sized image (auto=True) starts from whatever [num_sectors=...] the build
+    file carries and grows until the tool stops complaining. The two tools phrase
+    the overflow differently -- mkfatfsimg says "No space left", mkqnx6fsimg says
+    "Insufficient num_sectors" and states the exact count it needs -- and both are
+    handled, the latter by jumping straight to the requested size. An explicitly
+    sized image (auto=False) never grows: if you asked for 200M you want to be
+    told it does not fit, not to silently get 400M.
 
-        parts = [p for p in (default_attr, extra_attr) if p]
-        if attr_map.get(key, '').strip():
-            used_attrs.add(key)
-            parts.append(attr_map[key].strip())
+    Returns the tool's combined output on success; bb.fatal on failure."""
+    import os
+    import re
+    import subprocess
 
-        prefix = '[%s] ' % ' '.join(parts) if parts else ''
-        return '%s%s=%s' % (prefix, ifs_dest, source)
+    if cwd is None:
+        cwd = os.path.dirname(out) or None
 
-    entries = []
+    output = ''
+    for attempt in range(attempts):
+        proc = subprocess.run([tool, buildfile, out], capture_output=True,
+                              text=True, cwd=cwd, env=env)
+        output = (proc.stdout or '') + (proc.stderr or '')
+        if proc.returncode == 0:
+            return output
 
-    if d.getVar('QNX_IFS_AUTO_ENTRIES') == '1' and os.path.isdir(stage_root):
-        searchable = (d.getVar('QNX_IFS_SEARCHABLE_DIRS') or '').split()
-        excluded = (d.getVar('QNX_IFS_EXCLUDE_DIRS') or '').split()
-        excl_suffix = tuple((d.getVar('QNX_IFS_EXCLUDE_SUFFIXES') or '').split())
+        # Only a genuine space failure is retried; anything else (a missing
+        # source, a licence problem) is a real error, and inflating the image
+        # would only bury it -- a licensing error once got reported as "still
+        # fails after 5 attempts at growing it" after quietly inflating a
+        # partition from 50MB to 370MB on the way.
+        needed = re.search(r'need at least (\d+)', output)
+        overflow = needed or 'No space left' in output
+        if not auto or not overflow:
+            bb.fatal("%s failed on %s:\n%s"
+                     % (tool, buildfile, output.strip() or '(no output)'))
 
-        for dirpath, _, filenames in os.walk(stage_root):
-            reldir = os.path.relpath(dirpath, stage_root)
-            reldir = '' if reldir == '.' else reldir
+        with open(buildfile) as f:
+            text = f.read()
+        # Anchored to line start: a template may *mention* [num_sectors=...] in a
+        # comment (they often explain the hand-maintained value they replace),
+        # and rewriting the comment instead of the directive is a silent no-op.
+        match = re.search(r'^\[num_sectors=(\d+)\]', text, re.M)
+        if not match:
+            bb.fatal("%s ran out of space on %s and it has no [num_sectors=...] "
+                     "to grow:\n%s"
+                     % (tool, buildfile, output.strip() or '(no output)'))
 
-            # Build inputs for other recipes, not image content.
-            if any(reldir == x or reldir.startswith(x + '/') for x in excluded):
-                continue
+        old = int(match.group(1))
+        # Jump straight to what the tool asked for (with the grow factor as
+        # headroom) when it told us; otherwise multiply and retry.
+        new = int((int(needed.group(1)) if needed else old) * factor)
+        new += (-new) % 8            # mkqnx6fsimg wants a multiple of 8
+        bb.note("%s did not fit in %d sectors; retrying with %d"
+                % (os.path.basename(out), old, new))
+        with open(buildfile, 'w') as f:
+            f.write(text.replace(match.group(0), '[num_sectors=%d]' % new))
 
-            for name in sorted(filenames):
-                if name.endswith(excl_suffix):
-                    continue
+    bb.fatal("%s still does not fit after %d attempts. Either set/raise an "
+             "explicit size, or look at the last failure:\n%s"
+             % (os.path.basename(out), attempts, output.strip() or '(no output)'))
 
-                ifs_dest = '/%s/%s' % (reldir, name)
-                full = os.path.join(dirpath, name)
-
-                if os.path.islink(full):
-                    # Versioned shared libraries stage as a chain --
-                    # libfoo.so -> libfoo.so.1 -> libfoo.so.1.2.3. Emitting a
-                    # symlink as a plain entry would silently duplicate the
-                    # payload once per name.
-                    entries.append(record(name, ifs_dest, os.readlink(full),
-                                          extra_attr='type=link'))
-                elif reldir in searchable:
-                    # e.g. aarch64le/bin/qnx-hello  ->  /bin/qnx-hello=qnx-hello
-                    entries.append(record(name, ifs_dest, name))
-                else:
-                    bb.warn("%s: %s/%s is outside the mkifs search path (%s). "
-                            "It will not be added to images automatically; add an "
-                            "explicit entry via QNX_IFS_EXTRA_ENTRIES."
-                            % (pn, reldir or '.', name, ' '.join(searchable)))
-
-    # bitbake stores variable values literally -- "a\nb" keeps the backslash and
-    # the n, and a line continuation collapses to a space -- so there is no way
-    # to write a multi-line value. Translate the literal escape into a real
-    # newline, otherwise mkifs sees several records run together on one line.
-    extra = (d.getVar('QNX_IFS_EXTRA_ENTRIES') or '').replace('\\n', '\n').strip()
-
-    # A key that matched nothing is a typo, and would otherwise be silently
-    # ignored: the file keeps its default permissions or its original location
-    # and nothing says why.
-    for key in sorted(set(attr_map) - used_attrs):
-        if attr_map[key].strip():
-            bb.warn("%s: QNX_IFS_ATTR[%s] matched no staged file. Expected a "
-                    "basename, e.g. the name as installed into "
-                    "${QNX_STAGE_BINDIR}." % (pn, key))
-    for key in sorted(set(dest_map) - used_dests):
-        if dest_map[key].strip():
-            bb.warn("%s: QNX_IFS_DEST[%s] matched no staged file. Expected a "
-                    "basename, e.g. the name as installed into "
-                    "${QNX_STAGE_BINDIR}." % (pn, key))
-
-    if entries or extra:
-        dropin_dir = destdir + d.getVar('QNX_IFS_DROPIN_DIR')
-        bb.utils.mkdirhier(dropin_dir)
-        with open(os.path.join(dropin_dir, pn + '.files'), 'w') as f:
-            f.write('### %s\n' % pn)
-            for e in entries:
-                f.write(e + '\n')
-            if extra:
-                f.write(extra + '\n')
-
-    startup = (d.getVar('QNX_IFS_STARTUP_CMD') or '').strip()
-    waitfor = (d.getVar('QNX_IFS_STARTUP_WAITFOR') or '').split()
-
-    if waitfor and not startup:
-        bb.warn("%s: QNX_IFS_STARTUP_WAITFOR is set but QNX_IFS_STARTUP_CMD is "
-                "not, so nothing will ever create %s"
-                % (pn, ' '.join(waitfor)))
-
-    if startup:
-        prio = (d.getVar('QNX_IFS_STARTUP_PRIORITY') or '500').strip()
-        if not prio.isdigit():
-            bb.fatal("%s: QNX_IFS_STARTUP_PRIORITY must be a number, got '%s'"
-                     % (pn, prio))
-
-        timeout = (d.getVar('QNX_IFS_STARTUP_WAITFOR_TIMEOUT') or '5').strip()
-
-        dropin_dir = destdir + d.getVar('QNX_IFS_DROPIN_DIR')
-        bb.utils.mkdirhier(dropin_dir)
-        with open(os.path.join(dropin_dir, pn + '.startup'), 'w') as f:
-            # The header carries the priority to the image recipe, which cannot
-            # read another recipe's variables.
-            f.write('### %s prio=%s\n' % (pn, prio))
-            f.write(startup + '\n')
-            for path in waitfor:
-                f.write('waitfor %s %s\n' % (path, timeout))
-}
-do_install[postfuncs] += "qnx_sdp_write_ifs_dropin"
-
-# Without these, editing any of the drop-in inputs would not invalidate
-# do_install, and the change would silently not reach the image.
-qnx_sdp_write_ifs_dropin[vardeps] += "QNX_IFS_AUTO_ENTRIES QNX_IFS_STARTUP_CMD \
-                                      QNX_IFS_EXTRA_ENTRIES QNX_IFS_SEARCHABLE_DIRS \
-                                      QNX_IFS_STARTUP_PRIORITY QNX_IFS_STARTUP_WAITFOR \
-                                      QNX_IFS_STARTUP_WAITFOR_TIMEOUT \
-                                      QNX_IFS_DEFAULT_ATTR \
-                                      QNX_IFS_ATTR_SIG QNX_IFS_DEST_SIG"

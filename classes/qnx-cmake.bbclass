@@ -14,10 +14,9 @@
 
 inherit qnx-sdp
 
-# cmake/ninja come from the host. Both are in HOSTTOOLS on any machine set up to
-# run bitbake, so there is no native recipe to build.
-HOSTTOOLS += "cmake ninja"
-
+# cmake/ninja come from the host, allowed through bitbake's sanitized PATH by
+# the HOSTTOOLS addition in conf/layer.conf. It cannot be done here: HOSTTOOLS
+# symlinks are created once at cooker startup, before any class is inherited.
 OECMAKE_GENERATOR ?= "Ninja"
 OECMAKE_BUILD_TYPE ?= "Release"
 OECMAKE_SOURCEPATH ?= "${S}"

@@ -211,92 +211,29 @@ addtask generate_diskfiles after do_configure before do_compile
 
 python do_compile() {
     import os
-    import re
-    import subprocess
 
     b = d.getVar('B')
+    env = qnx_sdp_task_env(d)
+    attempts = int(d.getVar('QNX_DISK_GROW_ATTEMPTS') or '5')
+    factor = float(d.getVar('QNX_DISK_GROW_FACTOR') or '1.5')
 
-    # A python task's subprocess inherits bitbake's environment, not the one
-    # bitbake generates for shell tasks -- so the SDP variables and HOME that
-    # `export` puts in a shell task are simply absent here. The SDP's licence
-    # check then looks for its lock file under the wrong home and reports
-    # "can't open file: /root/.qnxlicenses.lck", which reads like a permissions
-    # problem rather than a missing environment.
-    env = dict(os.environ)
-    for var in ('HOME', 'QNX_HOST', 'QNX_TARGET', 'QNX_CONFIGURATION',
-                'QNX_CONFIGURATION_EXCLUSIVE', 'PATH', 'PROCESSOR', 'ARCH'):
-        value = d.getVar(var)
-        if value:
-            env[var] = value
-
-    def run(tool, buildfile, out):
-        proc = subprocess.run([tool, buildfile, out], capture_output=True,
-                              text=True, cwd=b, env=env)
-        return proc.returncode, (proc.stdout or '') + (proc.stderr or '')
-
-    def build_partition(tool, buildfile, out, marker, auto):
-        """Run a filesystem image tool, growing the image if it does not fit.
-
-        A byte count is a poor predictor of how large a filesystem must be:
-        mkfatfsimg needs far more than its contents (a hand-tuned QNX BSP
-        typically reserves several times the payload), and the overhead depends
-        on cluster size and file count rather than scaling cleanly. Rather than
-        pick a fudge factor that is wrong for somebody else's image, an
-        auto-sized partition retries at a larger size until it fits.
-
-        An explicitly sized partition never grows: if you asked for 200M you
-        want to be told it does not fit, not to silently get 400M."""
-        attempts = int(d.getVar('QNX_DISK_GROW_ATTEMPTS') or '5')
-        factor = float(d.getVar('QNX_DISK_GROW_FACTOR') or '1.5')
-
-        for attempt in range(attempts):
-            rc, output = run(tool, buildfile, out)
-            if rc == 0:
-                return
-
-            # Only a genuine space failure is retried. Treating *any* failure
-            # as "too small" was worse: a licensing error was reported as
-            # "still fails after 5 attempts at growing it", having quietly
-            # inflated the partition from 50MB to 370MB on the way.
-            if not auto or 'No space left' not in output:
-                bb.fatal("%s failed on %s:\n%s"
-                         % (tool, buildfile, output.strip() or '(no output)'))
-
-            with open(buildfile) as f:
-                text = f.read()
-            # Anchored to the start of a line: a template may well *mention*
-            # [num_sectors=...] in a comment (they usually explain the
-            # hand-maintained value they replace), and rewriting the comment
-            # instead of the directive is a silent no-op that looks like the
-            # tool ignoring the retry.
-            match = re.search(r'^\[num_sectors=(\d+)\]', text, re.M)
-            if not match:
-                bb.fatal("%s failed on %s and it has no [num_sectors=...] to "
-                         "grow:\n%s"
-                         % (tool, buildfile, output.strip() or '(no output)'))
-
-            old = int(match.group(1))
-            new = int(old * factor)
-            new += new % 8            # mkqnx6fsimg wants a multiple of 8
-            bb.note("%s did not fit in %d sectors; retrying with %d"
-                    % (os.path.basename(out), old, new))
-            with open(buildfile, 'w') as f:
-                f.write(text.replace(match.group(0), '[num_sectors=%d]' % new))
-
-        bb.fatal("%s still fails after %d attempts at growing it. Either set an "
-                 "explicit size, or look at the last failure:\n%s"
-                 % (out, attempts, output.strip() or '(no output)'))
+    # Both partitions are built by the shared mkfatfsimg/mkqnx6fsimg-with-grow
+    # helper in qnx-sdp.bbclass -- the same code qnx-rootfs uses for the guest
+    # rootfs. A byte count is a poor predictor of how large a filesystem must be
+    # (mkfatfsimg in particular reserves several times its payload), so an
+    # auto-sized partition grows until it fits; an explicit size never does.
+    def build(tool, buildfile, out, auto):
+        qnx_build_fsimg(d, tool, buildfile, out, auto, env,
+                        attempts=attempts, factor=factor, cwd=b)
 
     boot_auto = (d.getVar('QNX_DISK_BOOT_SIZE') or 'auto').strip() == 'auto'
-    build_partition('mkfatfsimg', os.path.join(b, 'boot.build'),
-                    os.path.join(b, 'part-boot.img'),
-                    'QNX_DISK_BOOT_SECTORS', boot_auto)
+    build('mkfatfsimg', os.path.join(b, 'boot.build'),
+          os.path.join(b, 'part-boot.img'), boot_auto)
 
     if os.path.isfile(os.path.join(b, 'data.build')):
         data_auto = (d.getVar('QNX_DISK_DATA_SIZE') or 'auto').strip() == 'auto'
-        build_partition('mkqnx6fsimg', os.path.join(b, 'data.build'),
-                        os.path.join(b, 'part-data.img'),
-                        'QNX_DISK_DATA_SECTORS', data_auto)
+        build('mkqnx6fsimg', os.path.join(b, 'data.build'),
+              os.path.join(b, 'part-data.img'), data_auto)
 }
 
 python do_generate_diskcfg() {
@@ -310,20 +247,29 @@ python do_generate_diskcfg() {
 
     partitions = [p for p in ('part-boot.img', 'part-data.img')
                   if os.path.isfile(os.path.join(b, p))]
-    used = sum(os.path.getsize(os.path.join(b, p)) for p in partitions)
-    used += qnx_parse_size(d.getVar('QNX_DISK_RESERVED'), 'QNX_DISK_RESERVED')
+    reserved = qnx_parse_size(d.getVar('QNX_DISK_RESERVED'), 'QNX_DISK_RESERVED')
+
+    # diskimage aligns every partition to a cylinder boundary, so each partition
+    # -- and the reserved MBR/IPL area before the first -- occupies a whole
+    # number of cylinders that it never shares. Rounding the *sum* of the raw
+    # byte sizes (as an earlier version did) under-counts by up to one cylinder
+    # per partition, which surfaces as diskimage's "Out of space placing
+    # partition N". Round each region up to cylinders first, then sum.
+    part_cylinders = [math.ceil(os.path.getsize(os.path.join(b, p)) / cylinder)
+                      for p in partitions]
+    used_cylinders = math.ceil(reserved / cylinder) + sum(part_cylinders)
+    used = used_cylinders * cylinder
 
     requested = (d.getVar('QNX_DISK_SIZE') or 'auto').strip()
     if requested == 'auto':
-        total = used
+        cylinders = used_cylinders
     else:
         total = qnx_parse_size(requested, 'QNX_DISK_SIZE')
         if total < used:
-            bb.fatal("QNX_DISK_SIZE is %s but the partitions need %.1f MiB. "
-                     "Either raise it or set it to 'auto'."
+            bb.fatal("QNX_DISK_SIZE is %s but the partitions need %.1f MiB "
+                     "(cylinder-aligned). Either raise it or set it to 'auto'."
                      % (requested, used / 1024.0 / 1024.0))
-
-    cylinders = math.ceil(total / cylinder)
+        cylinders = math.ceil(total / cylinder)
 
     with open(os.path.join(b, 'disk.cfg'), 'w') as f:
         f.write(qnx_expand_template(d, d.getVar('QNX_DISK_CFG_TEMPLATE'),

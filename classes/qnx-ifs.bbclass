@@ -40,6 +40,12 @@ export ARCH = "${QNX_PROCESSOR}"
 QNX_IFS_INSTALL ?= ""
 DEPENDS += "${QNX_IFS_INSTALL}"
 
+# Recipes whose startup commands are suppressed in this image. The recipe's
+# files are still installed; only the startup script lines are dropped. Use
+# this when you want a recipe's binaries or libraries in the image but do not
+# want it started automatically at boot.
+QNX_IFS_STARTUP_DISABLE ?= ""
+
 # ---------------------------------------------------------------------------
 # SDP verification
 # ---------------------------------------------------------------------------
@@ -71,6 +77,12 @@ QNX_IMAGE_ADDR ?= "0x80000000"
 QNX_IMAGE_VIRTUAL ?= "${QNX_PROCESSOR},elf"
 QNX_IFS_PATH ?= "/proc/boot:/bin:/usr/bin:/sbin:/usr/sbin"
 QNX_IFS_LD_LIBRARY_PATH ?= "/proc/boot:/lib:/usr/lib:/lib/dll"
+
+# What /dev/console is linked to. A guest's console is the virtio console its
+# host provides; an image with real hardware overrides this with its UART
+# (the RPi5 host image uses /dev/ser10). Used by qnx-base.build.inc, which is
+# the reason it is a variable and not a line in each template.
+QNX_CONSOLE_DEV ?= "/dev/vcon1"
 
 # ---------------------------------------------------------------------------
 # toybox
@@ -110,6 +122,17 @@ QNX_IFS_BUILDFILE ?= "${B}/${QNX_IFS_NAME}.build"
 # refers to SDP binaries.
 QNX_IFS_ROOT ?= "${RECIPE_SYSROOT}${QNX_STAGE_DIR}"
 
+# The recipe sysroot itself, exposed to drop-in fragments as @QNX_IFS_SYSROOT@.
+#
+# This is how a recipe from a *normal* Yocto layer gets into the image. Our own
+# recipes install into the stage tree above and are found by bare name, but a
+# stock recipe installs to the ordinary FHS paths (/usr/bin, /usr/lib), which
+# are on no mkifs search path, so its fragment names each source by absolute
+# path instead. The fragment cannot write that path itself -- it belongs to
+# whichever image installs the recipe, not to the recipe -- so it writes the
+# marker and the image expands it here. See qnx-image-contract.bbclass.
+QNX_IFS_SYSROOT ?= "${RECIPE_SYSROOT}"
+
 # Additional roots, searched after the recipe sysroot and before $QNX_TARGET.
 # mkifs accepts -r repeatedly and searches them left to right, which is what lets
 # a board layer add a BSP install tree holding binaries the SDP does not ship --
@@ -117,6 +140,50 @@ QNX_IFS_ROOT ?= "${RECIPE_SYSROOT}${QNX_STAGE_DIR}"
 # friends, none of which exist under $QNX_TARGET.
 QNX_IFS_EXTRA_ROOTS ?= ""
 QNX_IFS_ROOTS ?= "${QNX_IFS_ROOT} ${QNX_IFS_EXTRA_ROOTS}"
+
+def qnx_ifs_expand_install(d, names, dropin_dir):
+    """Expand packagegroups in an install list, depth first.
+
+    A name whose sysroot carries a <name>.install drop-in is a group (see
+    qnx-packagegroup.bbclass); it is replaced by its members, which may
+    themselves be groups. Everything else passes through untouched.
+
+    Order is preserved and a name already present is not added twice, so an
+    image that installs a group *and* one of its members -- to pin its position
+    in the startup sequence, say -- gets the member once, where it first asked
+    for it."""
+    import os
+
+    out = []
+    seen = set()
+
+    def walk(name, trail):
+        if name in seen:
+            return
+        if name in trail:
+            bb.fatal("%s: packagegroup cycle: %s"
+                     % (d.getVar('PN'), ' -> '.join(list(trail) + [name])))
+
+        path = os.path.join(dropin_dir, name + '.install')
+        if not os.path.isfile(path):
+            seen.add(name)
+            out.append(name)
+            return
+
+        # A group contributes nothing itself; it is replaced by its members.
+        # It is still marked seen, so installing the same group twice is a
+        # no-op rather than a repeated expansion.
+        seen.add(name)
+        with open(path) as f:
+            for line in f:
+                line = line.split('#', 1)[0].strip()
+                if line:
+                    walk(line, trail + (name,))
+
+    for name in names:
+        walk(name, ())
+    return out
+
 
 python do_generate_buildfile() {
     import os
@@ -129,7 +196,8 @@ python do_generate_buildfile() {
     # QNX_IFS_DROPIN_DIR is already rooted at QNX_STAGE_DIR, so it is joined to
     # RECIPE_SYSROOT -- not to QNX_IFS_ROOT, which would double the stage dir.
     dropin_dir = d.getVar('RECIPE_SYSROOT') + d.getVar('QNX_IFS_DROPIN_DIR')
-    installed = (d.getVar('QNX_IFS_INSTALL') or '').split()
+    installed = qnx_ifs_expand_install(
+        d, (d.getVar('QNX_IFS_INSTALL') or '').split(), dropin_dir)
 
     def read_dropins(suffix):
         """Read the <pn><suffix> drop-ins of everything installed.
@@ -165,24 +233,68 @@ python do_generate_buildfile() {
 
     files = '\n'.join(text for _, _, text in read_dropins('.files'))
 
-    # Startup fragments are ordered by priority, so a driver can be brought up
-    # before the resource manager that needs it. The priority is carried in the
-    # fragment's header line ("### <pn> prio=<n>") because the image recipe
-    # cannot read another recipe's variables.
-    #
-    # Sorting on (priority, list index) makes the order of QNX_IFS_INSTALL the
-    # tiebreak, so equal priorities stay predictable and controllable.
-    def priority_of(pn, text):
-        match = re.match(r'###\s+\S+\s+prio=(\d+)', text)
-        if match:
-            return int(match.group(1))
-        bb.warn("%s: startup fragment from '%s' has no priority header; "
-                "treating it as the default 500" % (d.getVar('PN'), pn))
-        return 500
+    # Startup fragments are ordered by QNX_IFS_STARTUP_AFTER dependencies,
+    # carried in the header ("### <pn> after=dep1,dep2"). The assembler
+    # topologically sorts them: a recipe naming another in AFTER is guaranteed
+    # to come after it in the script. Recipes with no constraints, or at the
+    # same depth in the graph, fall back to QNX_IFS_INSTALL order.
 
+    disabled = set((d.getVar('QNX_IFS_STARTUP_DISABLE') or '').split())
     fragments = read_dropins('.startup')
-    fragments.sort(key=lambda item: (priority_of(item[1], item[2]), item[0]))
-    startup = '\n'.join(text for _, _, text in fragments)
+
+    if disabled:
+        fragments = [(idx, pn, text) for idx, pn, text in fragments
+                     if pn not in disabled]
+
+    def after_of(pn, text):
+        match = re.match(r'###\s+\S+\s+after=(.*)', text)
+        if match:
+            raw = match.group(1).strip()
+            return raw.split(',') if raw else []
+        bb.warn("%s: startup fragment from '%s' has no after= header"
+                % (d.getVar('PN'), pn))
+        return []
+
+    present = {item[1] for item in fragments}
+    deps = {}
+    for _, pn, text in fragments:
+        after = after_of(pn, text)
+        for dep in after:
+            if dep not in present:
+                bb.warn("%s: '%s' declares QNX_IFS_STARTUP_AFTER = '%s', "
+                        "but '%s' has no startup in this image"
+                        % (d.getVar('PN'), pn, dep, dep))
+        deps[pn] = [a for a in after if a in present]
+
+    from collections import defaultdict
+
+    install_idx = {item[1]: item[0] for item in fragments}
+    by_pn = {item[1]: item for item in fragments}
+
+    in_degree = {pn: len(deps.get(pn, [])) for pn in present}
+    successors = defaultdict(list)
+    for pn in present:
+        for dep in deps.get(pn, []):
+            successors[dep].append(pn)
+
+    ready = sorted([pn for pn in present if in_degree[pn] == 0],
+                   key=lambda p: install_idx.get(p, 0))
+    ordered = []
+    while ready:
+        pn = ready.pop(0)
+        ordered.append(by_pn[pn])
+        for s in successors[pn]:
+            in_degree[s] -= 1
+            if in_degree[s] == 0:
+                ready.append(s)
+        ready.sort(key=lambda p: install_idx.get(p, 0))
+
+    if len(ordered) != len(present):
+        cycle = sorted(present - {item[1] for item in ordered})
+        bb.fatal("%s: startup ordering cycle among: %s"
+                 % (d.getVar('PN'), ', '.join(cycle)))
+
+    startup = '\n'.join(text for _, _, text in ordered)
 
     # A recipe that stages nothing and starts nothing is almost certainly a
     # mistake -- a typo in QNX_IFS_INSTALL, or a recipe that never installed
@@ -194,10 +306,10 @@ python do_generate_buildfile() {
                     "image. Does it install into ${QNX_STAGE_DIR} and inherit "
                     "qnx-sdp?" % (d.getVar('PN'), pn))
 
-    with open(template) as f:
-        raw = f.read()
-
-    if '@QNX_IFS_FILES@' not in raw:
+    # Include-resolved, not raw: a template is allowed to keep the generated
+    # sections in a shared fragment, and checking the unresolved text would
+    # reject it for a marker that is in fact present.
+    if '@QNX_IFS_FILES@' not in qnx_read_template(d, template):
         bb.fatal("%s contains no @QNX_IFS_FILES@ marker, so installed recipes "
                  "have nowhere to go" % template)
 
@@ -244,7 +356,12 @@ python do_generate_buildfile() {
             % (buildfile, template, len(installed)))
 }
 addtask generate_buildfile after do_configure before do_mkifs
-do_generate_buildfile[vardeps] += "QNX_IFS_INSTALL"
+do_generate_buildfile[vardeps] += "QNX_IFS_INSTALL QNX_IFS_STARTUP_DISABLE"
+
+# Editing a shared fragment must rebuild the images that include it. The
+# template itself is already tracked (it comes through SRC_URI); the fragments
+# come off the include path, which bitbake knows nothing about.
+do_generate_buildfile[file-checksums] += "${@qnx_template_include_checksums(d)}"
 
 do_mkifs() {
 	mkdir -p ${B}
@@ -267,6 +384,40 @@ do_mkifs() {
 addtask mkifs after do_compile before do_install
 
 do_install[noexec] = "1"
+
+# ---------------------------------------------------------------------------
+# dumpifs -- see what actually went in
+# ---------------------------------------------------------------------------
+# `bitbake -c dumpifs <image>` prints the image's contents on the console,
+# building the image first if needed. Saves finding dumpifs and the deploy
+# directory by hand; a python task because a shell task's output only goes to
+# the log file.
+python do_dumpifs() {
+    import os
+    import subprocess
+
+    ifs = os.path.join(d.getVar('B'), d.getVar('QNX_IFS_NAME') + '.ifs')
+    if not os.path.isfile(ifs):
+        bb.fatal("%s does not exist -- did do_mkifs run?" % ifs)
+
+    # A python task's subprocess sees bitbake's environment, not the generated
+    # shell-task one, so the SDP paths must be passed explicitly (same story as
+    # qnx-disk's do_compile).
+    env = dict(os.environ)
+    for var in ('HOME', 'QNX_HOST', 'QNX_TARGET', 'PATH'):
+        value = d.getVar(var)
+        if value:
+            env[var] = value
+
+    proc = subprocess.run(['dumpifs', '-v', ifs], capture_output=True,
+                          text=True, env=env)
+    if proc.returncode != 0:
+        bb.fatal("dumpifs failed:\n%s" % (proc.stderr or proc.stdout))
+    bb.plain(proc.stdout)
+}
+addtask dumpifs after do_mkifs
+do_dumpifs[nostamp] = "1"
+do_dumpifs[doc] = "Print the contents of the built IFS"
 
 do_deploy() {
 	install -d ${DEPLOYDIR}
