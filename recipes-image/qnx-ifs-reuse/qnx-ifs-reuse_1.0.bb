@@ -24,7 +24,7 @@ inherit qnx-ifs
 #          so it is the one that catches a wrong CMAKE_SYSTEM_NAME or a lost
 #          -V<variant>. Both of those silently produce a *working build* of the
 #          wrong thing, so having a cmake recipe in a real image is the check.
-QNX_IFS_INSTALL = "bzip2 json-c"
+QNX_IFS_INSTALL = "qnx-base-runtime bzip2 json-c"
 
 # scarthgap has no UNPACKDIR, so file:// sources land directly in WORKDIR.
 S = "${WORKDIR}"

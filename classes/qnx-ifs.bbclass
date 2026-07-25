@@ -141,6 +141,228 @@ QNX_IFS_SYSROOT ?= "${RECIPE_SYSROOT}"
 QNX_IFS_EXTRA_ROOTS ?= ""
 QNX_IFS_ROOTS ?= "${QNX_IFS_ROOT} ${QNX_IFS_EXTRA_ROOTS}"
 
+# ---------------------------------------------------------------------------
+# Shared-library closure
+# ---------------------------------------------------------------------------
+# mkifs has NO dependency resolution. `-r` adds search paths for the files a
+# build file *names*; nothing else ever enters the image. A build file that
+# lists pci-server and not libc.so produces an image where pci-server exists and
+# cannot run -- procnto reports errno 83, ELIBACC, and the binary looks broken
+# when it is merely alone. Nothing catches this before the board: dumpifs
+# happily lists an image whose every executable is unloadable.
+#
+# The QNX BSP answer is a hand-maintained list -- rpi5-hypervisor.build carries
+# ~200 lines of "General shared libraries" -- which has to be re-derived by hand
+# every time a recipe gains a dependency. Instead this reads DT_NEEDED out of
+# every binary the build file references, transitively, and appends whatever is
+# missing. The loader comes with it: PT_INTERP asks for /usr/lib/ldqnx-64.so.2,
+# which the startup preamble's procmgr_symlink points at /proc/boot, so the
+# loader is staged there.
+#
+# Set QNX_IFS_AUTO_DEPS = "0" to write the list by hand instead.
+QNX_IFS_AUTO_DEPS ?= "1"
+
+# The dynamic loader, staged at /proc/boot to match the procmgr_symlink in
+# qnx-startup-preamble.build.inc.
+QNX_IFS_LOADER ?= "ldqnx-64.so.2"
+
+# Sonames never to add, for a library that is deliberately absent or supplied by
+# something the closure cannot see. Space separated, matched on basename.
+QNX_IFS_DEP_EXCLUDE ?= ""
+
+# Where mkifs looks under each -r root, and equally where a resolved library is
+# placed in the image: a library found at <root>/${PROCESSOR}/usr/lib lands at
+# /usr/lib, which is what LD_LIBRARY_PATH in the boot block already covers.
+QNX_IFS_SEARCH_SUBDIRS ?= "lib lib/dll usr/lib bin sbin usr/bin usr/sbin usr/libexec boot/sys"
+
+
+def qnx_ifs_search_dirs(d):
+    """The directories mkifs searches, in its own order: each -r root first,
+    left to right, then $QNX_TARGET.
+
+    Each entry is (host directory, image directory). The second half is what
+    makes the closure place a library correctly: one found under a root's
+    usr/lib belongs at /usr/lib in the image, which is where the boot block's
+    LD_LIBRARY_PATH already looks."""
+    import os
+
+    processor = d.getVar('QNX_PROCESSOR')
+    subdirs = (d.getVar('QNX_IFS_SEARCH_SUBDIRS') or '').split()
+
+    roots = (d.getVar('QNX_IFS_ROOTS') or '').split()
+    roots.append(d.getVar('QNX_TARGET'))
+
+    return [(os.path.join(root, processor, sub), '/' + sub)
+            for root in roots for sub in subdirs]
+
+
+def qnx_ifs_resolve(name, search_dirs):
+    """Resolve a build-file source the way mkifs would.
+
+    Returns (host path, image directory), or (None, None)."""
+    import os
+
+    if os.path.isabs(name):
+        return (name, None) if os.path.isfile(name) else (None, None)
+    for host_dir, image_dir in search_dirs:
+        candidate = os.path.join(host_dir, name)
+        if os.path.isfile(candidate):
+            return candidate, image_dir
+    return None, None
+
+
+def qnx_ifs_buildfile_records(text):
+    """Every (destination, source) a generated build file declares.
+
+    Skips the boot and startup script blocks and any inline `= { ... }` body:
+    a command named in a script is not a file record, which is precisely the
+    trap that left pipe and slogger2 out of the image while the script called
+    them by name.
+
+    Destinations matter as much as sources. Two records may name different host
+    files and still collide in the image -- a library staged by a recipe into
+    its sysroot and the SDP's copy of the same soname are different files with
+    the same destination -- and mkifs rejects that outright with "Entry
+    'usr/lib/libbz2.so.1' redefined"."""
+    import re
+
+    # Inline bodies, including the boot and startup-script blocks.
+    text = re.sub(r'=\s*\{.*?\n\}', '=', text, flags=re.S)
+
+    records = []
+    for line in text.splitlines():
+        line = line.split('#', 1)[0].strip()
+        if not line:
+            continue
+        is_link = '[type=link]' in line
+        # Strip the leading attribute groups ([uid=0 gid=0 perms=0755] ...).
+        while line.startswith('['):
+            end = line.find(']')
+            if end < 0:
+                break
+            line = line[end + 1:].strip()
+        if not line or line.startswith('['):
+            continue
+
+        if '=' in line:
+            dest, source = line.split('=', 1)
+            dest, source = dest.strip(), source.strip()
+        else:
+            dest, source = line, line
+
+        # A link creates no payload and its right-hand side is an image path
+        # rather than a host file -- but it still claims its destination.
+        records.append((dest, None if is_link else source))
+    return records
+
+
+def qnx_ifs_needed(path, readelf):
+    """DT_NEEDED sonames of an ELF file; empty for anything else."""
+    import re
+    import subprocess
+
+    try:
+        out = subprocess.run([readelf, '-d', path], check=False,
+                             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                             universal_newlines=True).stdout
+    except OSError:
+        return []
+    return re.findall(r'\(NEEDED\).*?\[([^\]]+)\]', out)
+
+
+def qnx_ifs_dep_records(d, text):
+    """Build-file records for every library `text` needs but does not carry."""
+    import os
+
+    search_dirs = qnx_ifs_search_dirs(d)
+    readelf = os.path.join(d.getVar('QNX_HOST'), 'usr', 'bin',
+                           d.getVar('QNX_TOOL_PREFIX') + 'readelf')
+    if not os.path.isfile(readelf):
+        bb.fatal("QNX_IFS_AUTO_DEPS needs %s, which does not exist" % readelf)
+
+    excluded = set((d.getVar('QNX_IFS_DEP_EXCLUDE') or '').split())
+
+    # Compared by realpath, since a build file naming `libcam.so` gets the
+    # symlink *and* its libcam.so.2 target, which is what DT_NEEDED asks for.
+    def real(path):
+        return os.path.realpath(path)
+
+    present = set()
+    claimed = set()
+    queue = []
+    for dest, source in qnx_ifs_buildfile_records(text):
+        claimed.add(dest)
+        if source is None:
+            continue
+        resolved, _ = qnx_ifs_resolve(source, search_dirs)
+        if resolved:
+            present.add(real(resolved))
+            queue.append(resolved)
+
+    records = []
+    missing = []
+    seen_soname = set()
+
+    while queue:
+        for soname in qnx_ifs_needed(queue.pop(0), readelf):
+            if soname in seen_soname or soname in excluded:
+                continue
+            seen_soname.add(soname)
+
+            resolved, image_dir = qnx_ifs_resolve(soname, search_dirs)
+            if not resolved:
+                missing.append(soname)
+                continue
+            if real(resolved) in present:
+                continue
+
+            present.add(real(resolved))
+            queue.append(resolved)
+
+            # The image already has something at that path -- typically a
+            # recipe that built this library itself, whose copy in its sysroot
+            # is a different file from the SDP's. Its dependencies still have to
+            # be walked, which is why this comes after the queue append, but
+            # emitting a second record would be "Entry ... redefined".
+            dest = '%s/%s' % (image_dir, soname)
+            if dest in claimed:
+                continue
+
+            claimed.add(dest)
+            records.append('%s=%s' % (dest, resolved))
+
+    if missing:
+        # Not fatal: a library may legitimately come from a data partition, and
+        # failing the build over one would be worse than a boot-time diagnostic.
+        bb.warn("%s: no host file for DT_NEEDED %s -- anything linking them "
+                "will fail at startup with ELIBACC. Add the recipe that "
+                "provides them, or list them in QNX_IFS_DEP_EXCLUDE if they "
+                "arrive some other way."
+                % (d.getVar('PN'), ', '.join(sorted(missing))))
+
+    if not records:
+        return []
+
+    header = ['',
+              '### shared-library closure (%d libraries, resolved from DT_NEEDED)'
+              % len(records),
+              '[uid=0 gid=0 perms=0755]']
+
+    # PT_INTERP asks for /usr/lib/ldqnx-64.so.2, which the startup preamble's
+    # procmgr_symlink redirects to /proc/boot -- so the loader goes there, which
+    # a bare destination is exactly what mkifs does.
+    loader = d.getVar('QNX_IFS_LOADER')
+    loader_path, _ = qnx_ifs_resolve(loader, search_dirs)
+    if loader_path:
+        header.append('%s=%s' % (loader, loader_path))
+    else:
+        bb.warn("%s: dynamic binaries are in this image but its loader (%s) "
+                "was not found on any mkifs search path; nothing will run."
+                % (d.getVar('PN'), loader))
+
+    return header + sorted(records)
+
+
 def qnx_ifs_expand_install(d, names, dropin_dir):
     """Expand packagegroups in an install list, depth first.
 
@@ -347,6 +569,20 @@ python do_generate_buildfile() {
         'QNX_IFS_STARTUP': startup,
     })
 
+    # Appended to the finished text, not to the files section: the closure has
+    # to see every record the image ends up with, including the ones the
+    # template writes itself and the toybox block above. Records are position
+    # independent, so the end of the file is as good as anywhere -- but the
+    # attribute prefix in the block is not optional, since mkifs attributes
+    # persist and this inherits whatever state the template left behind.
+    if oe.types.boolean(d.getVar('QNX_IFS_AUTO_DEPS') or '0'):
+        records = qnx_ifs_dep_records(d, content)
+        if records:
+            content = content.rstrip('\n') + '\n' + '\n'.join(records) + '\n'
+            bb.note("%s: shared-library closure added %d files"
+                    % (d.getVar('PN'),
+                       sum(1 for record in records if '=' in record)))
+
     buildfile = d.getVar('QNX_IFS_BUILDFILE')
     bb.utils.mkdirhier(os.path.dirname(buildfile))
     with open(buildfile, 'w') as f:
@@ -356,7 +592,9 @@ python do_generate_buildfile() {
             % (buildfile, template, len(installed)))
 }
 addtask generate_buildfile after do_configure before do_mkifs
-do_generate_buildfile[vardeps] += "QNX_IFS_INSTALL QNX_IFS_STARTUP_DISABLE"
+do_generate_buildfile[vardeps] += "QNX_IFS_INSTALL QNX_IFS_STARTUP_DISABLE \
+                                   QNX_IFS_AUTO_DEPS QNX_IFS_DEP_EXCLUDE \
+                                   QNX_IFS_LOADER QNX_IFS_SEARCH_SUBDIRS"
 
 # Editing a shared fragment must rebuild the images that include it. The
 # template itself is already tracked (it comes through SRC_URI); the fragments

@@ -63,13 +63,29 @@ set(CMAKE_CXX_FLAGS_INIT "-fexceptions -fPIC ${CXXFLAGS}")
 
 # Search the SDP *and* this recipe's sysroot, so a DEPENDS on another QNX recipe
 # makes its headers and libraries findable by find_path/find_library/find_package.
+#
+# ${RECIPE_SYSROOT} itself is listed first and does double duty. Recipes that
+# inherit qnx-sdp install under ${QNX_STAGE_DIR}, but recipes that do not --
+# meta-qt6's, above all -- install under the ordinary ${prefix}, so the plain
+# sysroot root is what makes those reachable at all.
+#
+# The subtler half is that FIND_ROOT_PATH_MODE_PACKAGE is ONLY, and under ONLY
+# cmake rewrites every search path to <root>/<path> *unless the path already
+# lies inside one of the roots*. Qt6Config.cmake looks its components up with
+#   find_package(Qt6Core PATHS ${RECIPE_SYSROOT}${libdir}/cmake NO_DEFAULT_PATH)
+# -- an absolute sysroot path. With only the ${QNX_STAGE_DIR} roots that path
+# was rewritten into nonsense and every component "was not found" while cmake
+# cheerfully reported that the config file it wanted exists. Rooting at the
+# sysroot makes such paths pass through untouched.
 set(CMAKE_FIND_ROOT_PATH
+    ${RECIPE_SYSROOT}
     ${QNX_TARGET}
     ${QNX_TARGET}/${QNX_PROCESSOR}
     ${RECIPE_SYSROOT}${QNX_STAGE_DIR}
     ${RECIPE_SYSROOT}${QNX_STAGE_DIR}/${QNX_PROCESSOR})
 set(CMAKE_PREFIX_PATH
     ${QNX_TARGET}/${QNX_PROCESSOR}
+    ${RECIPE_SYSROOT}${prefix}
     ${RECIPE_SYSROOT}${QNX_STAGE_DIR}/${QNX_PROCESSOR})
 
 set(CMAKE_FIND_LIBRARY_PREFIXES "lib")

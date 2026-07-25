@@ -16,10 +16,16 @@
 ## project, stripped to the bone: no m4 includes, no networking, no ssh/qconn,
 ## no block or watchdog drivers.
 ##
-## Unqualified names (startup-armv8_fm, procnto-smp-instr, ksh, devc-virtio,
-## libc.so) are resolved by mkifs out of $QNX_TARGET. Names contributed by
-## recipes resolve the same way out of the stage tree passed as `mkifs -r`,
-## which is why that tree mirrors $QNX_TARGET's layout (aarch64le/bin/...).
+## Unqualified names (startup-armv8_fm, procnto-smp-instr, ksh, devc-virtio)
+## are resolved by mkifs out of $QNX_TARGET. Names contributed by recipes
+## resolve the same way out of the stage tree passed as `mkifs -r`, which is why
+## that tree mirrors $QNX_TARGET's layout (aarch64le/bin/...).
+##
+## Resolving a name is all mkifs does: it never adds a file that is not listed,
+## so libc.so and the rest of the runtime are not implied by the binaries that
+## need them. qnx-ifs.bbclass works that closure out from DT_NEEDED and appends
+## it (QNX_IFS_AUTO_DEPS). A command merely *named* in the startup script is not
+## covered -- see the base system section at the bottom.
 ################################################################################
 
 [-optional]
@@ -61,8 +67,10 @@
 
 [uid=0 gid=0]
 
-[type=link] /bin/sh=/bin/ksh
-[type=link] /tmp=/dev/shmem
+# /bin/sh, /tmp and the base utilities are not here: they come from the
+# qnx-base-runtime recipe, which this image installs. The console link stays,
+# because which device is the console is a property of the image and of nothing
+# else -- this one is a guest, so it is the virtio console.
 [type=link] /dev/console=/dev/vcon1
 
 ################################################################################
@@ -72,16 +80,17 @@
 @QNX_IFS_FILES@
 
 ################################################################################
-## Base system: console driver and a few utilities for poking around.
-## mkifs pulls in each binary's shared library dependencies automatically.
+## Base system: the console driver, and nothing else.
 ##
-## ls, cat, uname and friends are not listed here: QNX 8 has no standalone
-## versions of them. They come from toybox, which qnx-ifs.bbclass adds to the
-## generated section above along with a link per command.
+## The shell, the loader, pipe and slogger2 and the rest of what the startup
+## script above calls all come from the qnx-base-runtime recipe -- this image
+## installs it by name, so there is nothing to list and nothing to keep in step.
+## Listing them here as well is not additive: mkifs fails with
+## "Entry 'bin/sh' redefined".
+##
+## Their shared libraries are appended by qnx-ifs.bbclass, which reads DT_NEEDED
+## from every binary in the generated file. ls, cat, uname and friends are not
+## here either: QNX 8 has no standalone versions, they come from toybox, which
+## qnx-ifs.bbclass adds along with a link per command.
 ################################################################################
 /sbin/devc-virtio=devc-virtio
-
-/bin/ksh=ksh
-/bin/pidin=pidin
-/bin/waitfor=waitfor
-/bin/slay=slay
