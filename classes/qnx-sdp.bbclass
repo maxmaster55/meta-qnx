@@ -377,9 +377,9 @@ def qnx_sdp_task_env(d):
 def qnx_build_fsimg(d, tool, buildfile, out, auto, env, attempts=6, factor=1.5, cwd=None):
     """Run a QNX filesystem-image tool, growing the image until it fits.
 
-    Shared by qnx-disk (host boot + data partitions) and qnx-rootfs (the guest
-    rootfs), because building a QNX filesystem image is one operation whichever
-    image wants it. `tool` is mkfatfsimg or mkqnx6fsimg.
+    Shared by qnx-disk (boot partition via mkfatfsimg) and qnx-rootfs (any
+    QNX6 filesystem via mkqnx6fsimg), because building a filesystem image is
+    one operation whichever image wants it. `tool` is mkfatfsimg or mkqnx6fsimg.
 
     A byte count is a poor predictor of how large a filesystem must be, so an
     auto-sized image (auto=True) starts from whatever [num_sectors=...] the build

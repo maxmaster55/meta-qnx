@@ -507,18 +507,17 @@ partitioned disk:
 inherit qnx-disk
 
 S = "${WORKDIR}"
-SRC_URI = "file://my-boot.build.in file://my-data.build.in file://my-disk.cfg.in"
+SRC_URI = "file://my-boot.build.in file://my-disk.cfg.in"
 
 QNX_DISK_NAME = "my"
-QNX_DISK_DATA_TEMPLATE = "${S}/my-data.build.in"   # optional partition
 
 # The image whose .ifs goes on the boot partition.
 QNX_DISK_INSTALL = "my-image"
 do_generate_diskfiles[depends] += "my-image:do_deploy"
 
-# Everything is "auto" by default. The data partition is written to at runtime,
-# so give it a real size rather than sizing it to its initial contents.
-QNX_DISK_DATA_SIZE = "512M"
+# If you have a data partition, point at a qnx-rootfs recipe's deployed image.
+QNX_DISK_DATA_IMG = "${DEPLOY_DIR_IMAGE}/my-data.img"
+do_compile[depends] += "my-data:do_deploy"
 ```
 
 The boot template needs the size marker and the files the board's firmware wants:
@@ -591,12 +590,12 @@ specific paths, so the template states them, mapping a staged tree onto its moun
 Getting it onto a running guest is three small wirings, all shown worked in
 [meta-qnx-guest](../../meta-qnx-guest/README.md): a `virtio-blk` vdev in the guest's
 `.qvmconf`, an inline `.rootfs-mount.sh` in its boot script that mounts `/dev/vblk0` at `/`,
-and a `QNX_DISK_DATA_EXTRA` line in the host-disk bbappend that places `rootfs.img` beside
-the guest IFS.
+and a `QNX_ROOTFS_EXTRA` line in the host data partition's bbappend that places `rootfs.img`
+beside the guest IFS.
 
-The host data partition (`qnx-disk`) and this rootfs both build their QNX6 image through
-the same helper, so both auto-grow the same way; the only difference is that the disk wraps
-its partition in an MBR and the rootfs is the bare filesystem a guest mounts directly.
+A host disk's data partition is itself a `qnx-rootfs` recipe whose deployed image
+`qnx-disk` wraps into the MBR via `QNX_DISK_DATA_IMG`. Every QNX6 filesystem — whether it
+is a guest data disk or a host data partition — goes through this single class.
 
 ## Debugging what ended up in an image
 

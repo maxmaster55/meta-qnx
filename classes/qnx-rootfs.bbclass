@@ -1,16 +1,13 @@
 # qnx-rootfs.bbclass -- build a bare QNX6 filesystem image with mkqnx6fsimg.
 #
-# An IFS is RAM-resident: every byte is copied into the guest's RAM at boot. So
-# a guest cannot carry a large runtime -- Qt, the virtio graphics stack -- inside
-# its IFS. The QNX BSP answer, which this reproduces, is a second image: a plain
-# QNX6 filesystem the guest is handed as a virtio-blk disk and mounts at boot.
-# This is the Yocto equivalent of qnx_guests/images/guest-1/rootfs.build.
+# The single class for every QNX6 filesystem image, whether it is a guest's
+# data disk (mounted with `mount -t qnx6 /dev/vblk0 /`) or a host disk's data
+# partition (wrapped into an MBR by qnx-disk).  There is no MBR and no
+# partition table here: the whole image *is* the filesystem.
 #
-# Unlike qnx-disk.bbclass there is no MBR and no partition table here: the whole
-# image *is* the filesystem, mounted with `mount -t qnx6 /dev/vblk0 /`. So it is
-# just mkqnx6fsimg over a generated build file -- with the same grow-on-overflow
-# safety net qnx-disk uses, because the real size a QNX6 filesystem needs is not
-# predictable from a byte count.
+# qnx-disk.bbclass points QNX_DISK_DATA_IMG at the deployed image from one of
+# these recipes and wraps it into its disk layout, so every QNX6 filesystem
+# goes through this class -- one code path for mkqnx6fsimg.
 #
 # A recipe lists what it carries, exactly like an image lists QNX_IFS_INSTALL:
 #
@@ -64,9 +61,11 @@ QNX_ROOTFS_GROW_FACTOR ?= "1.5"
 QNX_ROOTFS_INODES ?= "20000"
 QNX_ROOTFS_BLKSIZE ?= "4096"
 
-# Raw records for content with no staged file behind it, like
-# QNX_DISK_DATA_EXTRA. Newlines written as a literal \n (bitbake stores values
-# literally, so there is otherwise no way to express a multi-line value).
+# Raw records for content with no staged file behind it. Newlines written as a
+# literal \n (bitbake stores values literally, so there is otherwise no way to
+# express a multi-line value). This is how a layer adds content to a rootfs
+# defined elsewhere -- a guest layer appending its images, say -- without the
+# rootfs recipe having to know about it.
 QNX_ROOTFS_EXTRA ?= ""
 
 B = "${WORKDIR}/build"
@@ -115,9 +114,6 @@ python do_compile() {
     out = d.getVar('QNX_ROOTFS_IMG')
     auto = (d.getVar('QNX_ROOTFS_SIZE') or 'auto').strip() == 'auto'
 
-    # The shared mkqnx6fsimg-with-grow helper is the same one qnx-disk uses for
-    # the host's data partition -- building a QNX6 filesystem is one operation
-    # whichever image wants it.
     qnx_build_fsimg(d, 'mkqnx6fsimg',
                     d.getVar('QNX_ROOTFS_BUILDFILE'), out, auto,
                     qnx_sdp_task_env(d),

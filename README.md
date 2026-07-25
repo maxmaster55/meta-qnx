@@ -102,8 +102,8 @@ Full instructions in [docs/getting-started.md](docs/getting-started.md).
 | `classes/qnx-meson.bbclass` | Meson projects: generates a cross file, synthesises `.pc` files for SDP libraries. |
 | `classes/qnx-autotools.bbclass` | `./configure` + `make` projects: drives configure with qcc and the stage-tree install dirs. Reuses portable upstream libraries (zlib verified) with no patches. |
 | `classes/qnx-src.bbclass` | Application sources: fetch from a git repository, or build a local working tree in place via `externalsrc`. |
-| `classes/qnx-disk.bbclass` | FAT + QNX6 partitions wrapped in an MBR: a flashable `.img`, sized automatically. |
-| `classes/qnx-rootfs.bbclass` | A bare QNX6 filesystem image (`mkqnx6fsimg`) for payloads too large for a RAM-resident IFS — a guest's data disk. |
+| `classes/qnx-disk.bbclass` | FAT boot partition + optional pre-built data partition wrapped in an MBR: a flashable `.img`, sized automatically. |
+| `classes/qnx-rootfs.bbclass` | The single class for every QNX6 filesystem image (`mkqnx6fsimg`) — guest data disks, host data partitions, anything that is a bare QNX6 filesystem. A disk recipe wraps one via `QNX_DISK_DATA_IMG`. |
 | `classes/qnx-sdp-packages.bbclass` | Feature-to-package resolution and lockfile handling for the SDP. |
 | `classes/qnx-apk.bbclass` | Fetch, extract and stage a prebuilt package from QNX's OSS repository. |
 | `recipes-sdp/qnx-sdp/` | Tasks to check, search, resolve and install SDP packages. |
@@ -168,7 +168,3 @@ download, none of it ever used.
    roots, which would catch the `Host file 'x' not available` class of error before mkifs
    runs. (The other half of this — verifying staged binaries really are QNX target ELFs,
    catching a build system that ignored `${CC}` — is done: see `QNX_ELF_CHECK`.)
-3. `qnx-disk` and `qnx-rootfs` share the mkqnx6fsimg builder but still build the host data
-   partition and the guest rootfs through separate classes. They could be unified further
-   so a data partition is literally a `qnx-rootfs` image the disk wraps — see the note in
-   `qnx-rootfs.bbclass`.

@@ -503,8 +503,13 @@ still a valid build file on its own. Editing a fragment rebuilds the images that
 ## Disk images
 
 `inherit qnx-disk`. Produces a single `.img` you can write straight to an SD card:
-a FAT boot partition (`mkfatfsimg`), an optional QNX6 data partition
-(`mkqnx6fsimg`), wrapped in an MBR (`diskimage`).
+a FAT boot partition (`mkfatfsimg`) and an optional pre-built data partition,
+wrapped in an MBR (`diskimage`).
+
+The data partition is always a `qnx-rootfs` recipe's deployed image — `qnx-disk`
+never runs `mkqnx6fsimg` itself. This means every QNX6 filesystem goes through
+one code path (`qnx-rootfs.bbclass`), and its sizing, inode count and content
+injection (`QNX_ROOTFS_EXTRA`) are configured on the rootfs recipe, not the disk.
 
 ### Sizes
 
@@ -513,25 +518,20 @@ Each takes a byte count with an optional K/M/G suffix, or `auto`.
 | Variable | Default | Marker in template |
 | --- | --- | --- |
 | `QNX_DISK_BOOT_SIZE` | `auto` | `@QNX_DISK_BOOT_SECTORS@` |
-| `QNX_DISK_DATA_SIZE` | `auto` | `@QNX_DISK_DATA_SECTORS@` |
 | `QNX_DISK_SIZE` | `auto` | `@QNX_DISK_CYLINDERS@` |
 
-`auto` for a **partition** measures the files its build file references, plus
-inline `{ }` bodies, and adds `QNX_DISK_SLACK_PERCENT` over a floor. `auto` for
-the **disk** sums the partition images actually produced, so it is exact rather
-than estimated.
+`auto` for the **boot partition** measures the files its build file references,
+plus inline `{ }` bodies, and adds `QNX_DISK_SLACK_PERCENT` over a floor. `auto`
+for the **disk** sums the partition images actually produced, so it is exact
+rather than estimated.
 
 An explicit `QNX_DISK_SIZE` smaller than its contents is a hard error naming both
 numbers, rather than a corrupt image.
 
-> The data partition is written to at runtime, so `auto` — which sizes it to its
-> initial contents — is usually not what you want. Give it a real size.
-
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `QNX_DISK_SLACK_PERCENT` | `25` | headroom added to an auto-sized partition |
+| `QNX_DISK_SLACK_PERCENT` | `25` | headroom added to the auto-sized boot partition |
 | `QNX_DISK_BOOT_MIN` | `32M` | floor for the boot partition |
-| `QNX_DISK_DATA_MIN` | `64M` | floor for the data partition |
 | `QNX_DISK_RESERVED` | `1M` | space before the first partition, for MBR/IPL |
 
 ### Layout and templates
@@ -540,18 +540,10 @@ numbers, rather than a corrupt image.
 | --- | --- |
 | `QNX_DISK_NAME` | `${PN}` |
 | `QNX_DISK_BOOT_TEMPLATE` | `${S}/${QNX_DISK_NAME}-boot.build.in` |
-| `QNX_DISK_DATA_TEMPLATE` | `""` — optional; set it to add a data partition |
 | `QNX_DISK_CFG_TEMPLATE` | `${S}/${QNX_DISK_NAME}-disk.cfg.in` |
 | `QNX_DISK_INSTALL` | `""` — image recipes whose `.ifs` this disk needs |
+| `QNX_DISK_DATA_IMG` | `""` — path to a pre-built QNX6 image for the data partition; leave empty for a boot-only disk |
 | `QNX_DISK_SEARCH_ROOTS` | `${B} ${DEPLOY_DIR_IMAGE}` — where auto-sizing resolves bare names |
-
-QNX6 format-time parameters, available as `@QNX_DISK_DATA_INODES@` and
-`@QNX_DISK_DATA_BLKSIZE@`:
-
-| Variable | Default | Notes |
-| --- | --- | --- |
-| `QNX_DISK_DATA_INODES` | `50000` | preallocated at format time — a hard ceiling on file count |
-| `QNX_DISK_DATA_BLKSIZE` | `4096` | |
 
 Geometry, available as `@QNX_DISK_HEADS@` and friends. The defaults make a
 cylinder exactly 1 MiB, which keeps sizes on whole megabytes and partitions
@@ -567,8 +559,8 @@ aligned:
 
 `tmp/deploy/images/<machine>/` gets the disk image, a `.bmap` if `bmaptool` is
 available (faster flashing; optional, and a failure only warns), the intermediate
-`part-*.img`, and the generated `boot.build` / `data.build` / `disk.cfg` — which
-are what you read when a disk does not boot.
+`part-*.img`, and the generated `boot.build` / `disk.cfg` — which are what you
+read when a disk does not boot.
 
 ```bash
 sudo bmaptool copy qnx-host-disk.img /dev/sdX     # with the block map
@@ -577,12 +569,12 @@ sudo dd if=qnx-host-disk.img of=/dev/sdX bs=4M conv=fsync status=progress
 
 ---
 
-## Guest data disk (rootfs)
+## QNX6 filesystem images (rootfs)
 
 `inherit qnx-rootfs`. Produces a **bare QNX6 filesystem image** (`mkqnx6fsimg`) — no
-partition table, no MBR — for payloads too large to live in a RAM-resident IFS. A guest is
-handed it as a `virtio-blk` device and mounts it with `mount -t qnx6 /dev/vblk0 /`. This is
-the Yocto equivalent of `qnx_guests/images/guest-1/rootfs.build`.
+partition table, no MBR. This is the single class for every QNX6 filesystem, whether it is
+a guest data disk (mounted with `mount -t qnx6 /dev/vblk0 /`) or a host disk's data
+partition (wrapped into an MBR by `qnx-disk` via `QNX_DISK_DATA_IMG`).
 
 Like an image, a rootfs lists what it carries; the names become `DEPENDS` and their staged
 files arrive in the sysroot, reachable in the template under `@QNX_ROOTFS_SYSROOT@`:
@@ -606,15 +598,16 @@ search dirs), so those mappings are stated in the template, exactly as the proje
 | `QNX_ROOTFS_MIN` | `256M` | floor an auto-sized image starts from |
 | `QNX_ROOTFS_INODES` | `20000` | preallocated at format time — a hard ceiling on file count, available as `@QNX_ROOTFS_INODES@` |
 | `QNX_ROOTFS_BLKSIZE` | `4096` | `@QNX_ROOTFS_BLKSIZE@` |
-| `QNX_ROOTFS_EXTRA` | `""` | raw records for content with no staged file behind it, multi-line via literal `\n` (like `QNX_DISK_DATA_EXTRA`) |
+| `QNX_ROOTFS_EXTRA` | `""` | raw records for content with no staged file behind it, multi-line via literal `\n` — this is how a layer adds content to a rootfs defined elsewhere |
 
 Template markers: `@QNX_ROOTFS_SECTORS@` (the computed size — put it in `[num_sectors=...]`
 at the top), `@QNX_ROOTFS_INODES@`, `@QNX_ROOTFS_BLKSIZE@`, `@QNX_ROOTFS_SYSROOT@`, and
 `@QNX_ROOTFS_EXTRA@`. Deployed as `${QNX_ROOTFS_NAME}.img` plus the generated `.build`.
 
-A host disk carries a guest's `rootfs.img` onto its data partition the same way it carries
-the guest IFS — `QNX_DISK_DATA_EXTRA` in a `qnx-host-disk` bbappend, plus a task dependency
-on the rootfs recipe's `do_deploy`. See the bbappend in meta-qnx-guest.
+A host disk wraps a rootfs image as its data partition by setting `QNX_DISK_DATA_IMG` to
+the deployed path and adding a task dependency on `do_deploy`. A guest layer injects its
+artifacts into the host's data partition via a bbappend on the rootfs recipe that sets
+`QNX_ROOTFS_EXTRA`.
 
 ---
 
@@ -737,13 +730,18 @@ switches off.
 [cookbook](cookbook.md#a-prebuilt-package-from-qnxs-oss-repository) for the two-line
 recipe pattern and where the checksum comes from.
 
+Find a package, and get a paste-ready recipe for it, with
+`bitbake -c search_oss qnx-sdp` — see [sdp.md](sdp.md#bitbake--c-search_oss-qnx-sdp).
+
 | Variable | Default | Notes |
 | --- | --- | --- |
 | `QNX_APK_NAME` | `${BPN}` | package name in the repository |
 | `QNX_APK_VERSION` | `${PV}` | from the recipe filename |
-| `QNX_OSS_REPO` | `https://repo.oss.qnx.com` | |
-| `QNX_OSS_CHANNEL` | `8.0.4/qnx-extra` | also served: `8.0.3/core`, `8.0.3/extra`, `8.0.4/qnx-core` |
-| `QNX_OSS_ARCH` | `aarch64` | |
+| `QNX_OSS_REPO` | `https://repo.oss.qnx.com` | set in `conf/layer.conf`, so the class and the search task cannot drift |
+| `QNX_OSS_CHANNEL` | `8.0.4/qnx-extra` | the one per-recipe fact; also served: `8.0.3/core`, `8.0.3/extra`, `8.0.4/qnx-core` |
+| `QNX_OSS_ARCH` | `aarch64` | set in `conf/layer.conf` |
+| `QNX_OSS_SEARCH` | `""` | substring filter for `-c search_oss` |
+| `QNX_OSS_SEARCH_CHANNELS` | the four channels QNX serves | which indexes `-c search_oss` reads |
 | `QNX_APK_DEST` | `${QNX_STAGE_DIR}/${QNX_PROCESSOR}` | an apk is target-rooted; override `do_install` for a different layout |
 | `LICENSE_FLAGS` | `qnx-non-commercial` | most packages are `LicenseRef-QDL-Non-Commercial`; accept with `LICENSE_FLAGS_ACCEPTED` |
 
@@ -798,20 +796,23 @@ at once.
 | `do_generate_meson_cross` | `qnx-meson` | writes the cross file and the SDP `.pc` files |
 | `do_configure`/`do_compile`/`do_install` | `qnx-autotools` | runs `./configure`, `make`, `make install` with qcc |
 | `do_extract_apk` | `qnx-apk` | unpacks the `.apk`'s concatenated tar streams |
+| `do_search_oss` | `qnx-sdp` recipe | lists repo.oss.qnx.com packages and prints a paste-ready recipe |
 | `qnx_sdp_write_ifs_dropin` | `qnx-sdp` | `do_install` postfunc; writes the recipe's IFS fragments |
 | `qnx_sdp_check_staged_elfs` | `qnx-sdp` | `do_install` postfunc; rejects staged non-target ELFs |
 | `do_generate_buildfile` | `qnx-ifs` | expands the template into the real build file |
 | `do_mkifs` | `qnx-ifs` | runs mkifs |
 | `do_dumpifs` | `qnx-ifs` | prints the built image's contents (`bitbake -c dumpifs <image>`) |
 | `do_deploy` | `qnx-ifs` | copies `.ifs`, generated `.build` and `.sym` files to the deploy dir |
-| `do_generate_diskfiles` | `qnx-disk` | expands partition templates, auto-sizing from contents |
+| `do_generate_diskfiles` | `qnx-disk` | expands the boot partition template, auto-sizing from contents |
 | `do_generate_diskcfg` | `qnx-disk` | sizes the disk from the partition images actually built |
 | `do_generate_rootfs_buildfile` | `qnx-rootfs` | expands the rootfs template with the computed size |
 | `do_compile` | `qnx-rootfs` | runs mkqnx6fsimg, growing the image until it fits |
 
-`qnx-disk` and `qnx-rootfs` build their QNX6 filesystem images through one shared helper
-(`qnx_build_fsimg` in `qnx-sdp.bbclass`): it runs `mkfatfsimg`/`mkqnx6fsimg`, and for an
-auto-sized image grows and retries until the tool stops reporting an overflow.
+`qnx-disk` and `qnx-rootfs` share `qnx_build_fsimg` in `qnx-sdp.bbclass` for building
+filesystem images with grow-on-overflow retry. `qnx-disk` uses it for `mkfatfsimg` (boot
+partition); `qnx-rootfs` uses it for `mkqnx6fsimg` (every QNX6 filesystem). A disk's data
+partition is always a deployed `qnx-rootfs` image — `qnx-disk` never calls `mkqnx6fsimg`
+itself.
 
 Useful invocations:
 
@@ -820,4 +821,7 @@ bitbake -c dumpifs qnx-ifs-hello              # build if needed, print the conte
 bitbake -c generate_buildfile qnx-ifs-hello   # generate without running mkifs
 bitbake -e qnx-hello | grep '^CC='            # what a recipe will actually run
 bitbake -g qnx-hello && cat pn-buildlist      # what it drags in
+
+# What open-source packages can I get, and what recipe do I write for one?
+bitbake -c search_oss qnx-sdp -R <(echo 'QNX_OSS_SEARCH = "dbus"')
 ```

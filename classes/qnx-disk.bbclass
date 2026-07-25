@@ -5,16 +5,20 @@
 #
 #   mkfatfsimg   <boot template>  -> a FAT partition holding the IFS and the
 #                                    board's firmware/device tree
-#   mkqnx6fsimg  <data template>  -> an optional QNX6 partition for anything too
-#                                    large to live in a RAM-resident IFS
-#   diskimage    <disk config>    -> an MBR image containing both
+#   diskimage    <disk config>    -> an MBR image wrapping the boot partition
+#                                    and an optional pre-built data partition
+#
+# The data partition, if any, is a bare QNX6 filesystem image built by a
+# qnx-rootfs recipe and pointed at by QNX_DISK_DATA_IMG.  This class never
+# builds a QNX6 filesystem itself -- that responsibility lives entirely in
+# qnx-rootfs.bbclass, so there is exactly one code path for mkqnx6fsimg.
 #
 # Sizes may be given explicitly ("200M") or left to compute themselves ("auto"),
 # which is the interesting part. A QNX BSP normally carries these numbers by
 # hand -- the project this layer was written against has literal
 # "***CYLINDERS MODIFIED BY BUILD" and "***SECTORS MODIFIED BY BUILD" comments
-# marking the spots a script patches. Here the partitions are measured from what
-# actually goes into them, and the disk from the partition images that were
+# marking the spots a script patches. Here the boot partition is measured from
+# what actually goes into it, and the disk from the partition images that were
 # actually produced.
 
 inherit qnx-sdp deploy
@@ -31,10 +35,8 @@ QNX_DISK_NAME ?= "${PN}"
 # Templates
 # ---------------------------------------------------------------------------
 # Expanded exactly like IFS templates: any @VARIABLE@ comes from the datastore,
-# plus the computed sizes below. The data partition is optional -- leave
-# QNX_DISK_DATA_TEMPLATE unset for a boot-only disk.
+# plus the computed sizes below.
 QNX_DISK_BOOT_TEMPLATE ?= "${S}/${QNX_DISK_NAME}-boot.build.in"
-QNX_DISK_DATA_TEMPLATE ?= ""
 QNX_DISK_CFG_TEMPLATE ?= "${S}/${QNX_DISK_NAME}-disk.cfg.in"
 
 # ---------------------------------------------------------------------------
@@ -43,40 +45,31 @@ QNX_DISK_CFG_TEMPLATE ?= "${S}/${QNX_DISK_NAME}-disk.cfg.in"
 # Each accepts a byte count with an optional K/M/G suffix, or "auto".
 #
 #   QNX_DISK_BOOT_SIZE   the FAT partition          -> @QNX_DISK_BOOT_SECTORS@
-#   QNX_DISK_DATA_SIZE   the QNX6 partition         -> @QNX_DISK_DATA_SECTORS@
 #   QNX_DISK_SIZE        the whole disk             -> @QNX_DISK_CYLINDERS@
 #
-# "auto" for a partition measures the files its build file references and adds
-# QNX_DISK_SLACK_PERCENT. "auto" for the disk sums the partition images that were built,
-# so it is exact rather than estimated.
+# "auto" for the boot partition measures the files its build file references and
+# adds QNX_DISK_SLACK_PERCENT. "auto" for the disk sums the partition images
+# that were built, so it is exact rather than estimated.
 QNX_DISK_BOOT_SIZE ?= "auto"
-QNX_DISK_DATA_SIZE ?= "auto"
 QNX_DISK_SIZE ?= "auto"
 
-# Headroom added to an auto-sized partition, as a percentage plus a floor. A
-# filesystem needs room for its own metadata, and a data partition that is
-# exactly the size of its contents is useless at runtime.
+# Headroom added to an auto-sized boot partition, as a percentage plus a floor.
 QNX_DISK_SLACK_PERCENT ?= "25"
 
-# An auto-sized partition that does not fit is grown and retried, because the
-# real overhead of a filesystem is not predictable from a byte count. See
-# build_partition() in do_compile.
+# An auto-sized boot partition that does not fit is grown and retried, because
+# the real overhead of a filesystem is not predictable from a byte count.
 QNX_DISK_GROW_ATTEMPTS ?= "5"
 QNX_DISK_GROW_FACTOR ?= "1.5"
 QNX_DISK_BOOT_MIN ?= "32M"
-QNX_DISK_DATA_MIN ?= "64M"
 
-# QNX6 format-time parameters. Inodes are preallocated, so this is a ceiling on
-# the number of files the partition can ever hold.
-# Extra records for the data partition, available to its template as
-# @QNX_DISK_DATA_EXTRA@. This is how a layer adds content to a disk defined
-# elsewhere -- a guest layer appending its own image, say -- without the disk
-# recipe having to know about it, and without a dependency pointing the wrong
-# way between layers.
-QNX_DISK_DATA_EXTRA ?= ""
-
-QNX_DISK_DATA_INODES ?= "50000"
-QNX_DISK_DATA_BLKSIZE ?= "4096"
+# ---------------------------------------------------------------------------
+# Data partition
+# ---------------------------------------------------------------------------
+# Path to a pre-built QNX6 filesystem image (produced by a qnx-rootfs recipe)
+# that becomes the disk's data partition.  Leave empty for a boot-only disk.
+# The recipe that sets this must also add a task dependency on the rootfs
+# recipe's do_deploy so the image exists when this disk is compiled.
+QNX_DISK_DATA_IMG ?= ""
 
 # ---------------------------------------------------------------------------
 # Geometry
@@ -152,88 +145,56 @@ python do_generate_diskfiles() {
     sector_size = int(d.getVar('QNX_DISK_SECTOR_SIZE'))
     slack = 1.0 + int(d.getVar('QNX_DISK_SLACK_PERCENT')) / 100.0
 
-    def sectors_for(template, out, size_var, min_var, multiple_of=1):
-        """Expand a partition template, sizing it from its own contents if asked."""
-        requested = (d.getVar(size_var) or 'auto').strip()
-
-        # Two passes: the size marker cannot be known until the file is
-        # expanded, and expanding needs a value for it. Expand once with a
-        # placeholder purely to measure, then again for real.
-        # bitbake stores values literally, so a multi-line QNX_DISK_DATA_EXTRA
-        # has to be written with a literal \n and translated here -- the same
-        # treatment QNX_IFS_EXTRA_ENTRIES gets. .strip() drops the leading space
-        # a "+=" leaves behind, which mkqnx6fsimg rejects as a malformed filename.
-        extra = (d.getVar('QNX_DISK_DATA_EXTRA') or '').replace('\\n', '\n').strip()
-
-        probe = os.path.join(d.getVar('B'), os.path.basename(out) + '.probe')
-        with open(probe, 'w') as f:
-            f.write(qnx_expand_template(d, template, {
-                'QNX_DISK_BOOT_SECTORS': '0',
-                'QNX_DISK_DATA_SECTORS': '0',
-                'QNX_DISK_DATA_EXTRA': extra,
-            }))
-
-        if requested == 'auto':
-            content = qnx_disk_content_size(d, probe)
-            wanted = max(int(content * slack),
-                         qnx_parse_size(d.getVar(min_var), min_var))
-            bb.note("%s: auto-sized from %d bytes of content to %d bytes"
-                    % (os.path.basename(out), content, wanted))
-        else:
-            wanted = qnx_parse_size(requested, size_var)
-
-        sectors = math.ceil(wanted / sector_size)
-        if multiple_of > 1:
-            sectors = math.ceil(sectors / multiple_of) * multiple_of
-
-        with open(out, 'w') as f:
-            f.write(qnx_expand_template(d, template, {
-                'QNX_DISK_BOOT_SECTORS': str(sectors),
-                'QNX_DISK_DATA_SECTORS': str(sectors),
-                'QNX_DISK_DATA_EXTRA': extra,
-            }))
-        os.remove(probe)
-        return sectors
-
     boot_template = d.getVar('QNX_DISK_BOOT_TEMPLATE')
-    sectors_for(boot_template,
-                os.path.join(d.getVar('B'), 'boot.build'),
-                'QNX_DISK_BOOT_SIZE', 'QNX_DISK_BOOT_MIN')
+    out = os.path.join(d.getVar('B'), 'boot.build')
+    requested = (d.getVar('QNX_DISK_BOOT_SIZE') or 'auto').strip()
 
-    data_template = d.getVar('QNX_DISK_DATA_TEMPLATE')
-    if data_template:
-        # mkqnx6fsimg requires the sector count to be a multiple of 8.
-        sectors_for(data_template,
-                    os.path.join(d.getVar('B'), 'data.build'),
-                    'QNX_DISK_DATA_SIZE', 'QNX_DISK_DATA_MIN', multiple_of=8)
+    probe = out + '.probe'
+    with open(probe, 'w') as f:
+        f.write(qnx_expand_template(d, boot_template, {
+            'QNX_DISK_BOOT_SECTORS': '0',
+        }))
+
+    if requested == 'auto':
+        content = qnx_disk_content_size(d, probe)
+        wanted = max(int(content * slack),
+                     qnx_parse_size(d.getVar('QNX_DISK_BOOT_MIN'), 'QNX_DISK_BOOT_MIN'))
+        bb.note("boot.build: auto-sized from %d bytes of content to %d bytes"
+                % (content, wanted))
+    else:
+        wanted = qnx_parse_size(requested, 'QNX_DISK_BOOT_SIZE')
+
+    sectors = math.ceil(wanted / sector_size)
+
+    with open(out, 'w') as f:
+        f.write(qnx_expand_template(d, boot_template, {
+            'QNX_DISK_BOOT_SECTORS': str(sectors),
+        }))
+    os.remove(probe)
 }
 addtask generate_diskfiles after do_configure before do_compile
 
 python do_compile() {
     import os
+    import shutil
 
     b = d.getVar('B')
     env = qnx_sdp_task_env(d)
     attempts = int(d.getVar('QNX_DISK_GROW_ATTEMPTS') or '5')
     factor = float(d.getVar('QNX_DISK_GROW_FACTOR') or '1.5')
 
-    # Both partitions are built by the shared mkfatfsimg/mkqnx6fsimg-with-grow
-    # helper in qnx-sdp.bbclass -- the same code qnx-rootfs uses for the guest
-    # rootfs. A byte count is a poor predictor of how large a filesystem must be
-    # (mkfatfsimg in particular reserves several times its payload), so an
-    # auto-sized partition grows until it fits; an explicit size never does.
-    def build(tool, buildfile, out, auto):
-        qnx_build_fsimg(d, tool, buildfile, out, auto, env,
-                        attempts=attempts, factor=factor, cwd=b)
-
     boot_auto = (d.getVar('QNX_DISK_BOOT_SIZE') or 'auto').strip() == 'auto'
-    build('mkfatfsimg', os.path.join(b, 'boot.build'),
-          os.path.join(b, 'part-boot.img'), boot_auto)
+    qnx_build_fsimg(d, 'mkfatfsimg', os.path.join(b, 'boot.build'),
+                    os.path.join(b, 'part-boot.img'), boot_auto, env,
+                    attempts=attempts, factor=factor, cwd=b)
 
-    if os.path.isfile(os.path.join(b, 'data.build')):
-        data_auto = (d.getVar('QNX_DISK_DATA_SIZE') or 'auto').strip() == 'auto'
-        build('mkqnx6fsimg', os.path.join(b, 'data.build'),
-              os.path.join(b, 'part-data.img'), data_auto)
+    data_img = (d.getVar('QNX_DISK_DATA_IMG') or '').strip()
+    if data_img:
+        if not os.path.isfile(data_img):
+            bb.fatal("QNX_DISK_DATA_IMG points at %s, which does not exist. "
+                     "Add a do_compile[depends] on the rootfs recipe's do_deploy."
+                     % data_img)
+        shutil.copy2(data_img, os.path.join(b, 'part-data.img'))
 }
 
 python do_generate_diskcfg() {
@@ -249,12 +210,6 @@ python do_generate_diskcfg() {
                   if os.path.isfile(os.path.join(b, p))]
     reserved = qnx_parse_size(d.getVar('QNX_DISK_RESERVED'), 'QNX_DISK_RESERVED')
 
-    # diskimage aligns every partition to a cylinder boundary, so each partition
-    # -- and the reserved MBR/IPL area before the first -- occupies a whole
-    # number of cylinders that it never shares. Rounding the *sum* of the raw
-    # byte sizes (as an earlier version did) under-counts by up to one cylinder
-    # per partition, which surfaces as diskimage's "Out of space placing
-    # partition N". Round each region up to cylinders first, then sum.
     part_cylinders = [math.ceil(os.path.getsize(os.path.join(b, p)) / cylinder)
                       for p in partitions]
     used_cylinders = math.ceil(reserved / cylinder) + sum(part_cylinders)
@@ -290,17 +245,11 @@ do_deploy() {
 	install -d ${DEPLOYDIR}
 	install -m 0644 ${B}/${QNX_DISK_NAME}.img ${DEPLOYDIR}/
 
-	# The intermediate partition images and the generated build files are
-	# deployed too: when a disk does not boot, these are what you look at.
-	for f in ${B}/part-*.img ${B}/boot.build ${B}/data.build ${B}/disk.cfg; do
+	for f in ${B}/part-*.img ${B}/boot.build ${B}/disk.cfg; do
 		[ -e "$f" ] || continue
 		install -m 0644 "$f" ${DEPLOYDIR}/
 	done
 
-	# A block map makes flashing much faster, since only allocated blocks are
-	# written. Entirely optional -- bmaptool is not part of the SDP, and the
-	# image is complete and flashable without it -- so a failure here warns
-	# rather than failing the build.
 	if command -v bmaptool >/dev/null 2>&1; then
 		if ! bmaptool create -o ${DEPLOYDIR}/${QNX_DISK_NAME}.img.bmap \
 				${B}/${QNX_DISK_NAME}.img; then
