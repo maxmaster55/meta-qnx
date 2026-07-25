@@ -114,6 +114,68 @@ Filter with `QNX_SDP_SEARCH`.
 > the last step is still human. (For that specific question the answer is
 > `toybox` — QNX 8 ships no standalone `ls`.)
 
+### `bitbake -c search_oss qnx-sdp`
+
+The SDP is not the only source. QNX also publishes prebuilt **open-source**
+packages — dbus, glib, openssl, sqlite, Qt — as `.apk` files at
+[repo.oss.qnx.com](https://repo.oss.qnx.com), which `qnx-apk.bbclass` installs.
+This task is the discovery half: without it, using one means already knowing its
+name and channel.
+
+```bash
+bitbake -c search_oss qnx-sdp -R <(echo 'QNX_OSS_SEARCH = "dbus"')
+```
+
+```
+PACKAGE                      VERSION               SIZE  CHANNEL          DESCRIPTION
+dbus                         1.16.2-r2             0.4M  8.0.3/extra      Freedesktop.org message bus system
+dbus-dev                     1.16.2-r2             0.0M  8.0.3/extra      Freedesktop.org message bus system (development files)
+dbus-glib                    0.114-r0              0.1M  8.0.3/extra      GLib bindings for DBUS
+python3-dbus                 1.4.0-r0              0.1M  8.0.3/extra      Python3 bindings for DBUS
+```
+
+Each channel publishes an `APKINDEX.tar.gz` — the standard apk index — carrying
+name, version, size, licence, homepage and dependencies. **When the result
+narrows to four or fewer, the task prints the recipe** rather than describing it:
+
+```bitbake
+--- dbus_1.16.2-r2.bb ------------------------
+SUMMARY = "Freedesktop.org message bus system"
+HOMEPAGE = "https://www.freedesktop.org/Software/dbus"
+LICENSE = "AFL-2.1 OR GPL-2.0-or-later"
+
+inherit qnx-apk
+
+QNX_OSS_CHANNEL = "8.0.3/extra"
+
+# Run 'bitbake -c fetch dbus' once and paste the checksum it prints.
+SRC_URI[sha256sum] = ""
+
+# Depends on: glib qnx-io-sock
+```
+
+Paste that into a `.bb`, run `bitbake -c fetch dbus` once for the checksum, and
+it is installable by name via `QNX_IFS_INSTALL` (or `QNX_ROOTFS_INSTALL` for
+anything too large for a RAM-resident IFS). The sha256 is the one thing the
+index cannot supply — it records a SHA1, and a binary package fetched without a
+checksum is neither reproducible nor safe.
+
+The `Depends on:` line is advisory, not automatic: it is the *apk* dependency
+graph, and some entries (`qnx-io-sock`) are already in the SDP while others
+(`glib`) need a recipe of their own. Read it, do not paste it into `DEPENDS`.
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `QNX_OSS_SEARCH` | `""` | substring filter over name, description and licence |
+| `QNX_OSS_SEARCH_CHANNELS` | the four channels QNX serves | which indexes to read |
+| `QNX_OSS_REPO` | `https://repo.oss.qnx.com` | set in `conf/layer.conf` |
+| `QNX_OSS_ARCH` | `aarch64` | |
+
+The 8.0.3 channels are much the larger (~2400 packages between them); the 8.0.4
+pair are a smaller curated set, and `8.0.4/qnx-core` currently answers `403` to
+an anonymous index request, which the task reports and skips rather than failing
+on.
+
 ### `bitbake -c resolve_sdp qnx-sdp`
 
 Shows what `QNX_SDP_FEATURES` resolves to, what is already installed, what would

@@ -23,9 +23,11 @@ inherit qnx-sdp
 QNX_APK_NAME ?= "${BPN}"
 QNX_APK_VERSION ?= "${PV}"
 
-QNX_OSS_REPO ?= "https://repo.oss.qnx.com"
+# QNX_OSS_REPO and QNX_OSS_ARCH default in conf/layer.conf, so this class and
+# the catalogue search in the qnx-sdp recipe cannot drift apart. Only the
+# channel is a per-recipe fact: which one a given package lives in.
+# Find it with:  bitbake -c search_oss qnx-sdp
 QNX_OSS_CHANNEL ?= "8.0.4/qnx-extra"
-QNX_OSS_ARCH ?= "aarch64"
 
 # unpack=0: an .apk is several concatenated streams -- an APKv2 signature, the
 # control tarball, then the data tarball -- and bitbake's unpacker runs

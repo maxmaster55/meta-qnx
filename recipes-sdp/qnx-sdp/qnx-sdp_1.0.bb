@@ -230,6 +230,139 @@ do_search[nostamp] = "1"
 do_search[doc] = "List packages available from the QNX repository"
 
 
+# ---------------------------------------------------------------------------
+# search_oss -- what prebuilt open-source packages exist?
+# ---------------------------------------------------------------------------
+# The SDP catalogue above and QNX's OSS repository are two different sources.
+# The SDP carries QNX's own components; repo.oss.qnx.com carries prebuilt
+# open-source packages (dbus, glib, openssl, sqlite ...) as .apk files, which
+# qnx-apk.bbclass installs. This is the discovery half of that: without it,
+# using an OSS package means already knowing its name and channel.
+#
+# Each channel publishes an APKINDEX.tar.gz -- the standard apk index -- which
+# carries name, version, size, licence, homepage and dependencies for every
+# package. That is everything a recipe needs except the .apk's sha256, which is
+# not in the index; bitbake prints it on the first fetch (see the stub below).
+QNX_OSS_SEARCH ?= ""
+QNX_OSS_SEARCH_TIMEOUT ?= "30"
+
+def qnx_oss_parse_index(blob):
+    """Parse an APKINDEX into a list of {field: value} dicts.
+
+    The format is blank-line-separated records of single-letter fields:
+    P(ackage), V(ersion), T(itle), L(icence), S(ize), D(ependencies), U(rl)."""
+    packages = []
+    current = {}
+    for line in blob.decode('utf-8', 'replace').splitlines():
+        if not line.strip():
+            if current.get('P'):
+                packages.append(current)
+            current = {}
+            continue
+        if len(line) > 2 and line[1] == ':':
+            current[line[0]] = line[2:]
+    if current.get('P'):
+        packages.append(current)
+    return packages
+
+
+def qnx_oss_fetch_index(d, channel):
+    """Download and unpack one channel's APKINDEX. None if unavailable.
+
+    A channel that cannot be read is not fatal: QNX serves several, and at least
+    one (8.0.4/qnx-core) answers 403 to an anonymous request. Skipping it and
+    saying so beats failing a read-only query outright."""
+    import io
+    import tarfile
+    import urllib.request
+
+    url = '%s/%s/%s/APKINDEX.tar.gz' % (d.getVar('QNX_OSS_REPO'), channel,
+                                        d.getVar('QNX_OSS_ARCH'))
+    timeout = int(d.getVar('QNX_OSS_SEARCH_TIMEOUT') or '30')
+
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as response:
+            blob = response.read()
+        with tarfile.open(fileobj=io.BytesIO(blob), mode='r:gz') as tar:
+            member = tar.extractfile('APKINDEX')
+            return member.read() if member else None
+    except Exception as exc:
+        bb.note("%s: %s" % (channel, exc))
+        return None
+
+
+python do_search_oss() {
+    pattern = (d.getVar('QNX_OSS_SEARCH') or '').strip().lower()
+    channels = (d.getVar('QNX_OSS_SEARCH_CHANNELS') or '').split()
+
+    matches = []
+    searched = []
+    for channel in channels:
+        raw = qnx_oss_fetch_index(d, channel)
+        if raw is None:
+            continue
+        searched.append(channel)
+        for pkg in qnx_oss_parse_index(raw):
+            if pattern and pattern not in ('%s %s %s'
+                                          % (pkg.get('P', ''), pkg.get('T', ''),
+                                             pkg.get('L', ''))).lower():
+                continue
+            matches.append((channel, pkg))
+
+    if not searched:
+        bb.fatal("could not read any channel index from %s. Check network "
+                 "access and QNX_OSS_SEARCH_CHANNELS."
+                 % d.getVar('QNX_OSS_REPO'))
+
+    if not matches:
+        bb.plain("nothing matched '%s' in %s" % (pattern, ' '.join(searched)))
+        return
+
+    bb.plain("%-28s %-16s %9s  %-16s %s"
+             % ('PACKAGE', 'VERSION', 'SIZE', 'CHANNEL', 'DESCRIPTION'))
+    for channel, pkg in sorted(matches, key=lambda m: (m[1]['P'], m[0])):
+        size = int(pkg.get('S') or 0)
+        bb.plain("%-28s %-16s %8.1fM  %-16s %s"
+                 % (pkg['P'], pkg.get('V', '?'), size / 1048576.0, channel,
+                    (pkg.get('T') or '').strip()[:60]))
+
+    bb.plain("\n%d package(s) in %s. Filter with QNX_OSS_SEARCH."
+             % (len(matches), ' '.join(searched)))
+
+    # The payoff: for a narrow result, print the recipe rather than describing
+    # it. Only the sha256 is missing, because the index does not carry one --
+    # bitbake prints the right value on the first fetch.
+    if len(matches) > 4:
+        return
+
+    for channel, pkg in sorted(matches, key=lambda m: m[1]['P']):
+        deps = ' '.join(dep for dep in (pkg.get('D') or '').split()
+                        if not dep.startswith('/') and not dep.startswith('so:'))
+        bb.plain("""
+--- %s_%s.bb %s
+SUMMARY = "%s"
+HOMEPAGE = "%s"
+LICENSE = "%s"
+
+inherit qnx-apk
+
+QNX_OSS_CHANNEL = "%s"
+
+# Run 'bitbake -c fetch %s' once and paste the checksum it prints.
+SRC_URI[sha256sum] = ""
+%s"""
+                 % (pkg['P'], pkg.get('V', '1.0'), '-' * 24,
+                    (pkg.get('T') or pkg['P']).strip().rstrip('.'),
+                    pkg.get('U') or '', pkg.get('L') or 'CLOSED', channel,
+                    pkg['P'],
+                    ('\n# Depends on: %s\n' % deps) if deps else ''))
+}
+addtask search_oss
+do_search_oss[nostamp] = "1"
+do_search_oss[network] = "1"
+do_search_oss[doc] = "List prebuilt open-source packages from repo.oss.qnx.com"
+
+
 
 # ---------------------------------------------------------------------------
 # resolve -- what would be installed, and would it work?
