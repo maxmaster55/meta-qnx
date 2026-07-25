@@ -823,5 +823,6 @@ bitbake -e qnx-hello | grep '^CC='            # what a recipe will actually run
 bitbake -g qnx-hello && cat pn-buildlist      # what it drags in
 
 # What open-source packages can I get, and what recipe do I write for one?
-bitbake -c search_oss qnx-sdp -R <(echo 'QNX_OSS_SEARCH = "dbus"')
+echo 'QNX_OSS_SEARCH = "dbus"' > oss-search.conf
+bitbake -c search_oss qnx-sdp -R oss-search.conf
 ```

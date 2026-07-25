@@ -189,7 +189,8 @@ C/C++ libraries; code or dependency closures that assume Linux/glibc still need 
 You do not need to know the package name in advance:
 
 ```bash
-bitbake -c search_oss qnx-sdp -R <(echo 'QNX_OSS_SEARCH = "sqlite"')
+echo 'QNX_OSS_SEARCH = "sqlite"' > oss-search.conf
+bitbake -c search_oss qnx-sdp -R oss-search.conf
 ```
 
 This reads each channel's `APKINDEX` and prints name, version, size, channel and

@@ -1,18 +1,20 @@
 # Qt 6 on QNX from stock meta-qt6
 
-There are two ways to get Qt 6 onto QNX in this tree, and they are not competitors so
-much as different bets. This document is about the second one.
+Qt 6 comes from **stock meta-qt6**, cross-compiled for QNX by `qnx-toolchain.bbclass`
+plus the bbappends in `dynamic-layers/qt6-layer/`. There is no QNX-specific Qt recipe in
+this tree.
 
-| | `qt6-qnx` (meta-qnx-guest) | stock `meta-qt6` + bbappends |
+There used to be one — `qt6-qnx` in meta-qnx-guest, which drove Qt's own super-repo
+`cmake` build at 6.8.3 and staged a whole SDK under `${QNX_STAGE_DIR}/qt`. It was
+removed in favour of this route:
+
+| | removed `qt6-qnx` | stock `meta-qt6` + bbappends |
 | --- | --- | --- |
 | Qt version | 6.8.3, pinned by the recipe | whatever the meta-qt6 branch is (6.10.3 here) |
-| What builds it | one recipe driving Qt's own super-repo `cmake` build | one meta-qt6 recipe per Qt module |
-| Host tools | built by hand, phase 1 of `do_compile` | `qtbase-native`, wired up by `qt6-cmake.bbclass` |
+| What builds it | one recipe driving Qt's super-repo `cmake` build | one meta-qt6 recipe per Qt module |
+| Host tools | built by hand, phase 1 of `do_compile` | `qtbase-native`, wired by `qt6-cmake.bbclass` |
 | Rebuild granularity | all of Qt | per module |
-| Upstream tracking | you bump `PV` and the sha256 | you pull meta-qt6 |
-
-Neither is deprecated. `qt6-qnx` is self-contained and known-good; the meta-qt6 route is
-newer here, and gets you per-module rebuilds and someone else maintaining the recipes.
+| Upstream tracking | bump `PV` and the sha256 | pull meta-qt6 |
 
 ## Enabling it
 
@@ -98,8 +100,14 @@ XML, `README.md`, `REUSE.toml`, `qt_attribution.json` and `.prl` files. The harv
 which is right for bzip2 and wrong for Qt. Qt is simply the first recipe big enough to
 show it. In a RAM-resident IFS that is real bloat; on a QNX6 data disk it is only untidy.
 
-**Version skew.** meta-qt6's branch here is 6.10, against `qt6-qnx`'s 6.8.3. Anything
-built against the staged Qt — `qt-cluster` — is picking a side.
+**Layout differs from the old recipe, and silently.** `qt6-qnx` installed Qt under its
+own prefix, so `<prefix>/lib`, `<prefix>/qml`, `<prefix>/plugins`. meta-qt6's
+`qt6-paths.bbclass` puts QML at `${libdir}/qml` and plugins at `${libdir}/plugins`.
+`qt_cluster`'s CMakeLists derives its deploy paths as `${Qt6_DIR}/../../..` plus `/qml`
+and `/plugins`, which is right for the former and wrong for the latter — and it does not
+fail the configure. It deploys an empty `qml/` and the app cannot start. Those are
+`CACHE PATH` variables, so `qt-cluster` overrides `QT6_QML_DIR`/`QT6_PLUGIN_DIR`
+explicitly and asserts a non-empty `deploy/qml` in `do_install`.
 
 **Nothing has run.** Every claim above is about what links, not what works. "`libqqnx.so`
 links `libscreen`" is a long way from "a QML scene renders on the board". No Qt binary
@@ -107,8 +115,27 @@ produced this way has been put in an image or executed on hardware, and the QNX 
 service has to be running and configured before one could be.
 
 **OpenGL is off.** `no-opengl` means QtQuick falls back to its software rasteriser. That is
-enough to render, and it is not what a cluster UI wants. Turning it on means Qt finding
-QNX's GL implementation, which is untried here.
+enough to render, and it is not what a cluster UI wants. The old `qt6-qnx` recipe had the
+same limitation (`-DINPUT_opengl=no`), so this is not a regression — but it is not fixed
+either.
+
+The pieces to fix it do exist as prebuilt packages, in the **default** OSS channel:
+
+```bash
+bitbake -c search_oss qnx-sdp -R oss-search.conf   # QNX_OSS_SEARCH = "qnx-gles"
+```
+
+| Package | Channel |
+| --- | --- |
+| `qnx-egl`, `egl-headers` | `8.0.4/qnx-extra` |
+| `qnx-gles`, `gles-headers` | `8.0.4/qnx-extra` |
+| `qnx-libdrm`, `qnx-libgbm` | `8.0.4/qnx-extra` |
+| `qnx-vulkan`, `vulkan-headers` | `8.0.4/qnx-extra` |
+
+The SDP also already ships `libEGL.so.1`/`libGLESv2.so.1` (the host image installs them).
+So the blocker is not availability but Qt's configure tests finding a GL it accepts —
+staging the `-headers` packages into the sysroot and dropping `no-opengl` from
+`QNX_QTBASE_PACKAGECONFIG` is the experiment. Untried.
 
 **Memory.** Qt links several large objects in parallel and will take a machine down if
 `BB_NUMBER_THREADS` × `PARALLEL_MAKE` is set to the core count. `4` and `-j 4` are known to

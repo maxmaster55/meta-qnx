@@ -55,7 +55,8 @@ Then, in order of how cheap the answer is:
 1. **A standard QNX component?** → `bitbake -c search qnx-sdp`, add the feature to
    `QNX_SDP_FEATURES`, then `-c resolve_sdp` → `-c install_sdp` → `-c write_lockfile`.
 2. **A known open-source name?** →
-   `bitbake -c search_oss qnx-sdp -R <(echo 'QNX_OSS_SEARCH = "foo"')`. If it is there, the
+   `bitbake -c search_oss qnx-sdp -R oss-search.conf`, with `QNX_OSS_SEARCH = "foo"` in
+   that file. If it is there, the
    task prints the recipe.
 3. **Board-specific?** → it is in your BSP tree; add that tree via `QNX_IFS_EXTRA_ROOTS`.
    If it is not there either, it does not exist and you are porting it.
@@ -108,7 +109,8 @@ D-Bus is a good case because the obvious guess is wrong. It is **not** in the SD
 row 2, ordinary open source that QNX packages:
 
 ```bash
-bitbake -c search_oss qnx-sdp -R <(echo 'QNX_OSS_SEARCH = "dbus"')
+echo 'QNX_OSS_SEARCH = "dbus"' > oss-search.conf
+bitbake -c search_oss qnx-sdp -R oss-search.conf
 ```
 
 ```

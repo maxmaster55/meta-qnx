@@ -127,7 +127,8 @@ This task is the discovery half: without it, using one means already knowing its
 name and channel.
 
 ```bash
-bitbake -c search_oss qnx-sdp -R <(echo 'QNX_OSS_SEARCH = "dbus"')
+echo 'QNX_OSS_SEARCH = "dbus"' > oss-search.conf
+bitbake -c search_oss qnx-sdp -R oss-search.conf
 ```
 
 ```
@@ -137,6 +138,10 @@ dbus-dev                     1.16.2-r2             0.0M  8.0.3/extra      Freede
 dbus-glib                    0.114-r0              0.1M  8.0.3/extra      GLib bindings for DBUS
 python3-dbus                 1.4.0-r0              0.1M  8.0.3/extra      Python3 bindings for DBUS
 ```
+
+> `-R` needs a **real file**. bitbake parses the path as a config file and
+> rejects a process substitution (`-R <(echo ...)`) with `ParseError ... not a
+> BitBake file`. Set `QNX_OSS_SEARCH` in `local.conf` instead if you prefer.
 
 Each channel publishes an `APKINDEX.tar.gz` — the standard apk index — carrying
 name, version, size, licence, homepage and dependencies. **When the result
