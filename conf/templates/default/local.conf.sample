@@ -1,10 +1,9 @@
-# meta-qnx settings for conf/local.conf.
-#
-# Paste this into your build directory's conf/local.conf and adjust the paths.
-# Everything here has a default, so the only line you normally have to change is
-# QNX_SDP_ROOT.
+# local.conf for a meta-qnx build directory, created from
+# meta-qnx/conf/templates/default. Everything here has a default, so the only
+# line you normally have to change is QNX_SDP_ROOT.
 
 MACHINE = "qnx-aarch64le"
+DISTRO ?= "poky"
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -23,7 +22,7 @@ QNX_SDP_ROOT = "${TOPDIR}/qnx-sdp"
 #QNX_PROJECT_SRC = "/path/to/your/qnx-project"
 
 # ---------------------------------------------------------------------------
-# SDP package management -- optional, see docs/sdp.md
+# SDP package management -- optional, see meta-qnx/docs/sdp.md
 # ---------------------------------------------------------------------------
 # The QNX Software Center command-line tool. Needed only to check, search or
 # install SDP packages; builds do not use it.
@@ -33,11 +32,8 @@ QNX_SDP_ROOT = "${TOPDIR}/qnx-sdp"
 # already in the right format and can be used unchanged.
 #QNX_SDP_LOCKFILE = "${QNX_PROJECT_SRC}/qsc_install_packages.list"
 
-# What the SDP should contain. See conf/qnx-sdp-features.inc for the full list.
+# What the SDP should contain. See meta-qnx/conf/qnx-sdp-features.inc.
 #QNX_SDP_FEATURES = "core toolchain utils networking hypervisor"
-
-# Image builds verify the SDP against the lockfile first. Set to "0" to skip.
-#QNX_SDP_CHECK = "1"
 
 # ---------------------------------------------------------------------------
 # Recommended
@@ -52,7 +48,8 @@ INHERIT:remove = "uninative"
 INHERIT:remove = "create-spdx"
 
 # ---------------------------------------------------------------------------
-# Reusing recipes from normal Yocto layers -- optional, see docs/reusing-layers.md
+# Reusing recipes from normal Yocto layers -- optional, see
+# meta-qnx/docs/reusing-layers.md
 # ---------------------------------------------------------------------------
 # Uncomment to make qcc the default toolchain for every target recipe, so a
 # STOCK recipe from another layer (poky's bzip2, a meta-oe library) builds for
@@ -62,3 +59,7 @@ INHERIT:remove = "create-spdx"
 # another layer's recipes.
 #INHERIT += "qnx-toolchain"
 #DISTRO_FEATURES:remove = "ptest"
+
+# This must match the value in meta-poky's sanity checks; bump only when poky's
+# own local.conf.sample does.
+CONF_VERSION = "2"

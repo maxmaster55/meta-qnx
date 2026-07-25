@@ -7,6 +7,8 @@ image filesystems (IFS) with `mkifs` — using bitbake as the build orchestrator
 [Getting started](docs/getting-started.md) ·
 [Variable reference](docs/variables.md) ·
 [Cookbook](docs/cookbook.md) ·
+[Reusing normal Yocto layers](docs/reusing-layers.md) ·
+[Sharing between images](docs/sharing-between-images.md) ·
 [Managing the SDP](docs/sdp.md)
 
 Status: **working proof of concept.**
@@ -57,18 +59,30 @@ which files they stage. Here `QNX_IFS_INSTALL` becomes `DEPENDS`, and bitbake re
 "app B needs app A's headers and library" is a plain `DEPENDS` — the thing a makefile build
 cannot express without hand-ordering.
 
+**You can reuse recipes from normal Yocto layers.** With `qnx-toolchain` enabled (see
+[docs/reusing-layers.md](docs/reusing-layers.md)), `qcc` becomes the default toolchain for
+every target recipe, so a **stock** recipe — poky's own `bzip2`, a library from
+`meta-openembedded` — builds for QNX unmodified, and installs into an image by name.
+Proven end to end on upstream zlib, and on stock oe-core bzip2 (autotools) and json-c
+(cmake), shared libraries included. The honest limit: buildability is per-*recipe*, not
+per-*layer* — it works for portable C/C++ libraries; code or dependency closures that
+assume Linux/glibc still need porting.
+
 ## Quick start
 
 ```bash
-source poky/oe-init-build-env build-qnx
-# add meta-qnx to conf/bblayers.conf, then paste conf/local.conf.sample into
-# conf/local.conf and point QNX_SDP_ROOT at your SDP. It defaults to
+# One command creates a configured build directory (assumes meta-qnx beside poky):
+TEMPLATECONF=meta-qnx/conf/templates/default source poky/oe-init-build-env build-qnx
+# then point QNX_SDP_ROOT in conf/local.conf at your SDP. It defaults to
 # ${TOPDIR}/qnx-sdp, like DL_DIR, so that is the only line you normally change.
 
 bitbake qnx-ifs-hello                                  # a bootable IFS
 bitbake qnx-host-disk                                  # ...on a flashable disk image
-dumpifs tmp/deploy/images/qnx-aarch64le/qnx-hello.ifs
+bitbake -c dumpifs qnx-ifs-hello                       # print what went into it
 ```
+
+(In an existing build directory, add meta-qnx to `conf/bblayers.conf` and paste
+`conf/local.conf.sample` into `conf/local.conf` instead.)
 
 No SDP yet? Leave `QNX_SDP_ROOT` alone and run `bitbake -c install_sdp qnx-sdp` to create
 one in the build directory — see [docs/sdp.md](docs/sdp.md).
@@ -79,20 +93,31 @@ Full instructions in [docs/getting-started.md](docs/getting-started.md).
 
 | Path | Purpose |
 | --- | --- |
-| `classes/qnx-sdp.bbclass` | Points `CC`/`CXX`/… at `qcc`/`q++`, exports the SDP env, disables Yocto's toolchain and packaging, defines the staging contract. |
+| `classes/qnx-sdp.bbclass` | Points `CC`/`CXX`/… at `qcc`/`q++`, exports the SDP env, disables Yocto's toolchain and packaging, defines the staging contract. Inherited by our own recipes. |
+| `classes/qnx-toolchain.bbclass` | Makes `qcc` the default toolchain for **every** target recipe (via global `INHERIT`), so a stock recipe from a normal layer builds for QNX with no wrapper. Corrects oe-core's CMake toolchain file, which would otherwise say Linux/x86-64. Guarded, opt-in. |
+| `classes/qnx-image-contract.bbclass` | How **any** recipe declares what it puts in an image: the `ifs.d` drop-in format, startup ordering, per-entry `mkifs` attributes. Shared by `qnx-sdp` recipes and stock ones, which is why it is not part of either. |
+| `classes/qnx-packagegroup.bbclass` | A named, reusable set of recipes — one word in an image instead of a list two images have to keep in step. |
 | `classes/qnx-ifs.bbclass` | Expands `QNX_IFS_INSTALL` into a generated `.build` file, runs `mkifs`, deploys the results. |
 | `classes/qnx-cmake.bbclass` | CMake projects: generates a QNX toolchain file, drives configure/build/install. |
-| `classes/qnx-project-src.bbclass` | Builds an application working tree in place via `externalsrc`. |
+| `classes/qnx-meson.bbclass` | Meson projects: generates a cross file, synthesises `.pc` files for SDP libraries. |
+| `classes/qnx-autotools.bbclass` | `./configure` + `make` projects: drives configure with qcc and the stage-tree install dirs. Reuses portable upstream libraries (zlib verified) with no patches. |
+| `classes/qnx-src.bbclass` | Application sources: fetch from a git repository, or build a local working tree in place via `externalsrc`. |
 | `classes/qnx-disk.bbclass` | FAT + QNX6 partitions wrapped in an MBR: a flashable `.img`, sized automatically. |
+| `classes/qnx-rootfs.bbclass` | A bare QNX6 filesystem image (`mkqnx6fsimg`) for payloads too large for a RAM-resident IFS — a guest's data disk. |
 | `classes/qnx-sdp-packages.bbclass` | Feature-to-package resolution and lockfile handling for the SDP. |
 | `classes/qnx-apk.bbclass` | Fetch, extract and stage a prebuilt package from QNX's OSS repository. |
 | `recipes-sdp/qnx-sdp/` | Tasks to check, search, resolve and install SDP packages. |
 | `conf/machine/qnx-aarch64le.conf` | Thin machine: no kernel, no bootloader, no rootfs. |
 | `conf/qnx-sdp-features.inc` | Feature definitions: names mapped to package id patterns. |
-| `conf/local.conf.sample` | Copy-paste configuration block for a build directory. |
+| `conf/templates/default/` | `TEMPLATECONF` build templates: one command creates a configured build directory. |
+| `conf/local.conf.sample` | Copy-paste configuration block for an existing build directory. |
 | `recipes-example/qnx-hello/` | Hello-world C program built with `qcc`. |
 | `recipes-example/qnx-sysinfo/` | Second app, showing that adding one costs one word. |
 | `recipes-image/qnx-ifs-hello/` | Minimal bootable IFS, plus the `.build.in` template. |
+| `recipes-image/qnx-ifs-reuse/` | An IFS whose **entire payload is unmodified oe-core** — proof that a recipe nobody here wrote can be built for QNX and installed by name. One recipe per build system: bzip2 (autotools), json-c (cmake). |
+| `files/ifs/*.build.inc` | Shared `.build` fragments (boot header, startup preamble, base utilities, block and network stacks) that host and guest images both `#include`. |
+| `recipes-example/zlib/` | Unmodified upstream zlib via `qnx-autotools` — a reused OSS library, no patches. |
+| `recipes-example/qnx-zlib-user/` | Links `-lz` against that zlib through a plain `DEPENDS` — proves the sysroot handoff. |
 
 ## Design notes
 
@@ -113,12 +138,22 @@ variables (`${PROCESSOR}`, `${QNX_TARGET}`); expanding those would corrupt the f
 **mkifs attributes are passed through, not modelled.** mkifs has ~34 record attributes;
 `QNX_IFS_ATTR[name] = "uid=0 perms=4755"` reaches all of them, including future additions.
 
-**Boot ordering needs two knobs.** `QNX_IFS_STARTUP_PRIORITY` orders commands, but a driver
-started with `&` returns before its device exists — `QNX_IFS_STARTUP_WAITFOR` is what
-actually blocks.
+**Boot ordering needs two knobs.** `QNX_IFS_STARTUP_AFTER` declares dependencies between
+commands (like systemd's `After=`), but a driver started with `&` returns before its device
+exists — `QNX_IFS_STARTUP_WAITFOR` is what actually blocks.
 
 **toybox provides `ls`.** QNX 8 ships no standalone `ls`, `cat`, `cp` or `uname`; they are
 all one multicall binary. Images get it plus a link per command automatically.
+
+**Reusing upstream libraries costs a class, not a fork.** `qnx-cmake`, `qnx-meson` and
+`qnx-autotools` are the three build-system drivers. A portable upstream library builds for
+QNX with `inherit qnx-autotools` (or `-cmake`/`-meson`) plus its tarball URL and no code
+patches — verified against unmodified upstream zlib, which stages `libz` + `zlib.h` that
+another recipe then links with a one-line `DEPENDS`. The compiler is portable; only the
+*build-system metadata* of a stock OE recipe (its `ptest`/native/packaging assumptions) is
+Linux-bound, which is why the driver classes reuse the recipe *body* rather than trying to
+consume a foreign `.bb` wholesale. Consuming stock meta-oe recipes unmodified would instead
+need a full QNX `TCLIBC` provider — a much larger, release-tracking commitment.
 
 **`POPULATESYSROOTDEPS` is cleared.** `staging.bbclass` makes every target recipe's
 `do_populate_sysroot` depend on target binutils purely so it can strip. That one dependency
@@ -127,16 +162,13 @@ download, none of it ever used.
 
 ## Not done yet
 
-1. A meson class, for the GPU dependencies (`libepoxy`, `virglrenderer`) —
-   `src/qnx-aarch64le.ini` is already a meson cross file and can be templated the way
-   `qnx-cmake` templates its toolchain file.
-2. Routing *application* content to the QNX6 data partition rather than the IFS. The
-   partition exists (`qnx-disk`), but recipes cannot yet target it — an IFS is
-   RAM-resident, so large payloads belong there.
-3. The SDP version is not in the task hash, only its path — upgrading the SDP in place will
+1. The SDP version is not in the task hash, only its path — upgrading the SDP in place will
    not trigger rebuilds.
-4. A QA check that staged binaries really are QNX aarch64 ELFs, to catch a recipe whose
-   build system ignored `${CC}` and used the host compiler. A check that every bare name in
-   a build file resolves would catch the `Host file 'x' not available` class of error up
-   front too.
-
+2. A check that every bare name in a generated build file resolves against the search
+   roots, which would catch the `Host file 'x' not available` class of error before mkifs
+   runs. (The other half of this — verifying staged binaries really are QNX target ELFs,
+   catching a build system that ignored `${CC}` — is done: see `QNX_ELF_CHECK`.)
+3. `qnx-disk` and `qnx-rootfs` share the mkqnx6fsimg builder but still build the host data
+   partition and the guest rootfs through separate classes. They could be unified further
+   so a data partition is literally a `qnx-rootfs` image the disk wraps — see the note in
+   `qnx-rootfs.bbclass`.

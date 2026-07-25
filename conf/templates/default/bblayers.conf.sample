@@ -1,0 +1,17 @@
+# POKY_BBLAYERS_CONF_VERSION is increased each time build/conf/bblayers.conf
+# changes incompatibly
+POKY_BBLAYERS_CONF_VERSION = "2"
+
+BBPATH = "${TOPDIR}"
+BBFILES ?= ""
+
+# Deliberately minimal: nothing in meta-qnx needs meta-openembedded or any BSP
+# layer. Every target artifact comes from the QNX SDP, not from OE recipes.
+#
+# This assumes meta-qnx is checked out beside poky; adjust the path if not.
+# Project layers (meta-qnx-hyp, meta-qnx-guest) are added the same way.
+BBLAYERS ?= " \
+  ##OEROOT##/meta \
+  ##OEROOT##/meta-poky \
+  ##OEROOT##/../meta-qnx \
+  "

@@ -1,0 +1,15 @@
+### Shell environment set up for QNX builds via meta-qnx. ###
+
+Check conf/local.conf: QNX_SDP_ROOT should point at your QNX SDP install
+(default: ${TOPDIR}/qnx-sdp; 'bitbake -c install_sdp qnx-sdp' can create one).
+
+Common targets are:
+    qnx-hello           a QNX binary, compiled with qcc
+    qnx-ifs-hello       a bootable IFS containing it
+
+With meta-qnx-hyp / meta-qnx-guest added to conf/bblayers.conf:
+    qnx-host-image      hypervisor host IFS for Raspberry Pi 5
+    qnx-guest-image     guest IFS
+    qnx-host-disk       flashable SD card image carrying both
+
+Inspect a built image with:  bitbake -c dumpifs qnx-ifs-hello

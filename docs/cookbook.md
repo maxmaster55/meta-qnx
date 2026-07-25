@@ -6,7 +6,10 @@ real recipe in this layer or in `meta-qnx-hyp`.
 - [A hello-world application](#a-hello-world-application)
 - [Adding it to an image](#adding-it-to-an-image)
 - [An application with a makefile](#an-application-with-a-makefile)
+- [An application fetched from git](#an-application-fetched-from-git)
 - [A CMake application](#a-cmake-application)
+- [A meson project](#a-meson-project)
+- [A library reused from upstream (autotools)](#a-library-reused-from-upstream-autotools)
 - [A library other recipes link against](#a-library-other-recipes-link-against)
 - [A driver or resource manager](#a-driver-or-resource-manager)
 - [Permissions and ownership](#permissions-and-ownership)
@@ -17,6 +20,7 @@ real recipe in this layer or in `meta-qnx-hyp`.
 - [A board that needs binaries the SDP lacks](#a-board-that-needs-binaries-the-sdp-lacks)
 - [A prebuilt QNX OSS package](#a-prebuilt-package-from-qnxs-oss-repository)
 - [A flashable SD card image](#a-flashable-sd-card-image)
+- [A data disk for payloads too big for an IFS](#a-data-disk-for-payloads-too-big-for-an-ifs)
 - [Debugging what ended up in an image](#debugging-what-ended-up-in-an-image)
 
 ---
@@ -90,6 +94,36 @@ do_install() {
 > discards the `-std` and `-V` flags along with everything else. Pass `CC`/`CXX` and leave
 > `CFLAGS` alone unless you know the makefile appends rather than assigns.
 
+## An application fetched from git
+
+`qnx-src` handles the source side; combine it with whichever build class fits:
+
+```bitbake
+inherit qnx-sdp qnx-src
+
+QNX_SRC_REPO = "git://github.com/you/thing.git;protocol=https;branch=main"
+QNX_SRC_SUBDIR = "src/thing"        # optional, for a repo of many apps
+```
+
+By default this tracks the branch head — every build picks up the last push. Pin it for a
+reproducible, offline build:
+
+```bitbake
+QNX_SRC_REV = "c19814a7c0b4a0c4b0e5e0e1f2a3b4c5d6e7f8a9"
+```
+
+To hack on the application without committing, point the recipe at a checkout — per-recipe
+from `local.conf`:
+
+```bitbake
+QNX_SRC_LOCAL:pn-frame-router = "/path/to/checkout"
+```
+
+The tree is then built in place via `externalsrc` (no sstate, rebuilds every time — the
+right default while editing). Real examples: `spi-loopback` and `rpi-gpio` in the project
+layers fetch from GitHub; `frame-router` builds the monorepo working tree via
+`QNX_PROJECT_SRC`.
+
 ## A CMake application
 
 ```bitbake
@@ -118,6 +152,65 @@ OECMAKE_EXTRA_ARGS = "-DBUILD_TESTING=OFF -DUSE_FOO=ON"
 OECMAKE_BUILD_TYPE = "Debug"
 ```
 
+## A meson project
+
+```bitbake
+inherit qnx-meson
+
+QNX_MESON_ARGS = "-Dtests=false"
+```
+
+The class generates a cross file from the SDP paths, so nothing checked in ever goes stale
+relative to `QNX_SDP_ROOT`. Installs are already prefixed onto the stage tree.
+
+Two QNX-specific problems it solves that are worth knowing about:
+
+- **The SDP ships `libdrm`, `EGL`, `GLESv2` and `gbm` without pkg-config files**, so any
+  `dependency('egl')` would fail to configure. The class synthesises `.pc` files for them;
+  add more via `QNX_MESON_SDP_PCFILES = "... foo:1.0:-lfoo"`.
+- **meson does not understand `qcc -V`**, so the compilers are the GNU-style drivers
+  (`ntoaarch64-gcc`), exactly as a hand-written QNX cross file would use.
+
+Real examples: `libepoxy` and `virglrenderer` in `meta-qnx-hyp`.
+
+## A library reused from upstream (autotools)
+
+Most of meta-openembedded and oe-core is `./configure` + `make`. `qnx-autotools` drives
+that family, and a **portable** upstream library needs no patches — just the tarball:
+
+```bitbake
+inherit qnx-autotools
+
+SRC_URI = "https://example.org/libfoo-${PV}.tar.gz"
+SRC_URI[sha256sum] = "..."
+S = "${WORKDIR}/libfoo-${PV}"
+
+# For a real GNU autoconf project, that is usually all: the class passes
+# --host=aarch64-unknown-nto-qnx8.0.0 (cross mode), the stage-tree install dirs,
+# and --disable-static, then runs make + make install.
+EXTRA_OECONF = "--without-tests"
+```
+
+Real example: `recipes-example/zlib` builds **unmodified upstream zlib** this way. zlib's
+configure is hand-rolled rather than GNU autoconf, so it shows the escape hatches — a
+configure that rejects the standard flags is steered with a few overrides:
+
+```bitbake
+QNX_CONFIGURE_HOST = ""                    # this configure ignores --host/--build
+QNX_AUTOTOOLS_DIRS = "--libdir=${QNX_STAGE_LIBDIR} --includedir=${QNX_STAGE_INCLUDEDIR}"
+DISABLE_STATIC = ""                        # ...and rejects --disable-static
+EXTRA_OECONF = "--shared --uname=GNU"
+```
+
+It stages `libz.so*` into `${QNX_STAGE_LIBDIR}` and `zlib.h` into the sysroot, so
+`recipes-example/qnx-zlib-user` links it with nothing but `DEPENDS = "zlib"` and `-lz` —
+verified: the resulting binary's `NEEDED` list contains `libz.so.1`.
+
+> **The class removes the toolchain, not the porting.** A library builds unpatched only if
+> its *code* is portable. Something that reaches for a Linux `/proc` layout, a glibc-only
+> extension or a Linux socket option still needs the same fixes a hand build would — the
+> win is that you are not also fighting the toolchain.
+
 ## A library other recipes link against
 
 Install the library into the stage lib dir and its headers into the stage include dir:
@@ -143,26 +236,33 @@ and gets `-I`/`-L` pointing at them automatically. The header goes to the sysroo
 
 ## A driver or resource manager
 
-Start early, and make the ordering mean something:
+Declare what you need to run after, and make the ordering mean something:
 
 ```bitbake
 QNX_IFS_STARTUP_CMD = "rpi_gpio &"
-QNX_IFS_STARTUP_PRIORITY = "300"
+QNX_IFS_STARTUP_AFTER = ""
 QNX_IFS_STARTUP_WAITFOR = "/dev/gpio"
 ```
 
 `&` means the startup script continues the moment it forks — long before
-`resmgr_attach()` has registered the device. Priority orders the commands;
+`resmgr_attach()` has registered the device. `AFTER` orders the commands;
 `waitfor` is what actually blocks until the node exists. Use both.
 
-Generated result:
+An application that depends on the driver declares it:
+
+```bitbake
+QNX_IFS_STARTUP_CMD = "my-app"
+QNX_IFS_STARTUP_AFTER = "rpi-gpio"
+```
+
+Generated result (order derived from the dependency graph):
 
 ```text
-### rpi-gpio prio=300
+### rpi-gpio after=
 rpi_gpio &
 waitfor /dev/gpio 5
-### qnx-hello prio=500
-qnx-hello
+### my-app after=rpi-gpio
+my-app
 ```
 
 ## Permissions and ownership
@@ -447,6 +547,57 @@ Check it before flashing:
 fdisk -l my.img      # bootable FAT32 partition + type-179 QNX6 partition
 ```
 
+## A data disk for payloads too big for an IFS
+
+An IFS is copied into RAM whole at boot, so a large runtime — Qt, a graphics stack —
+cannot live in it. `qnx-rootfs` builds a bare QNX6 filesystem image that a guest mounts as
+a disk instead. It carries recipes the same way an image does:
+
+```bitbake
+inherit qnx-rootfs
+
+S = "${WORKDIR}"
+SRC_URI = "file://rootfs.build.in"
+
+QNX_ROOTFS_NAME = "rootfs"
+QNX_ROOTFS_TEMPLATE = "${S}/rootfs.build.in"
+
+# Recipes whose staged files ride on the disk -> DEPENDS. Add more with one word.
+QNX_ROOTFS_INSTALL = "qt-cluster"
+
+# "auto" grows from the floor until it fits; the ~366MB result grew from 192M.
+QNX_ROOTFS_SIZE = "auto"
+QNX_ROOTFS_MIN = "192M"
+
+do_configure[noexec] = "1"
+```
+
+Unlike an image there is **no auto-derived file list** — the guest expects things at
+specific paths, so the template states them, mapping a staged tree onto its mount path:
+
+```
+[num_sectors=@QNX_ROOTFS_SECTORS@]
+[num_inodes=@QNX_ROOTFS_INODES@]
+[blksize=@QNX_ROOTFS_BLKSIZE@]
+
+[uid=0 gid=0 perms=0755]
+
+# The whole deploy tree, copied to /qt-cluster. Launch it with /qt-cluster/run.sh.
+/qt-cluster=@QNX_ROOTFS_SYSROOT@/qt-cluster
+
+@QNX_ROOTFS_EXTRA@
+```
+
+Getting it onto a running guest is three small wirings, all shown worked in
+[meta-qnx-guest](../../meta-qnx-guest/README.md): a `virtio-blk` vdev in the guest's
+`.qvmconf`, an inline `.rootfs-mount.sh` in its boot script that mounts `/dev/vblk0` at `/`,
+and a `QNX_DISK_DATA_EXTRA` line in the host-disk bbappend that places `rootfs.img` beside
+the guest IFS.
+
+The host data partition (`qnx-disk`) and this rootfs both build their QNX6 image through
+the same helper, so both auto-grow the same way; the only difference is that the disk wraps
+its partition in an MBR and the rootfs is the bare filesystem a guest mounts directly.
+
 ## Debugging what ended up in an image
 
 **Read the generated build file first.** It is deployed next to the image and is the single
@@ -459,7 +610,8 @@ less tmp/deploy/images/qnx-aarch64le/my-image.build
 Then:
 
 ```bash
-dumpifs my-image.ifs                    # contents
+bitbake -c dumpifs my-image             # build if needed, print contents -- no PATH setup
+dumpifs my-image.ifs                    # contents (needs $QNX_HOST/usr/bin on PATH)
 dumpifs -v my-image.ifs                 # ...with uid/gid/mode
 dumpifs -b my-image.ifs                 # basenames only
 bitbake -c generate_buildfile my-image  # regenerate without running mkifs

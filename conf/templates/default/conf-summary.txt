@@ -1,0 +1,1 @@
+Build configuration for QNX images built through the QNX SDP (meta-qnx)

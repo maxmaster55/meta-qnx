@@ -6,14 +6,32 @@
   will refuse to parse the layer.
 - **A QNX SDP 8.0 install**, with a valid licence in `$HOME/.qnx`. The SDP is used
   **strictly read-only** — nothing in this layer writes to, cleans or reinstalls it.
-- **`cmake` and `ninja` on the host**, if you use `qnx-cmake`. The layer adds them to
-  `HOSTTOOLS` rather than building native recipes for them.
+- **`cmake`, `ninja`, `meson` and `pkg-config` on the host.** The layer puts them in
+  `HOSTTOOLS` (in `conf/layer.conf`) rather than building native recipes for them, and
+  bitbake makes the `HOSTTOOLS` symlinks at startup — so a missing one fails immediately,
+  even if no recipe uses it.
+- **Optional host tools:** `java` (only for the CommonAPI code generators), `bmaptool`
+  (faster flashing — a block map is written beside each disk image when present),
+  `patchelf` (used by the GPU-stack dependency script). All three are `HOSTTOOLS_NONFATAL`:
+  absent just means the corresponding feature is skipped.
 
 You do **not** need to source `qnxsdp-env.sh`. `qcc` runs from a plain environment given
 only `QNX_HOST`, `QNX_TARGET` and `PATH`, which is what makes this layer possible; the
 classes set those themselves.
 
 ## Set up a build
+
+The fast path — meta-qnx ships `TEMPLATECONF` templates, so one command creates a build
+directory with `bblayers.conf` and `local.conf` already filled in (it assumes meta-qnx is
+checked out beside poky):
+
+```bash
+cd /path/to/yocto
+TEMPLATECONF=meta-qnx/conf/templates/default source poky/oe-init-build-env build-qnx
+# then point QNX_SDP_ROOT in conf/local.conf at your SDP, if you have one
+```
+
+Or by hand, in an existing build directory:
 
 ```bash
 cd /path/to/yocto
@@ -80,6 +98,14 @@ Artifacts land in `tmp/deploy/images/qnx-aarch64le/`:
 
 ## Check it worked, without hardware
 
+The quick way — bitbake finds `dumpifs` and the image itself:
+
+```bash
+bitbake -c dumpifs qnx-ifs-hello
+```
+
+Or by hand:
+
 ```bash
 cd tmp/deploy/images/qnx-aarch64le
 
@@ -95,6 +121,10 @@ dumpifs -v qnx-hello.ifs | grep -A1 bin/qnx-hello
 
 `dumpifs` comes from the SDP, so `$QNX_HOST/usr/bin` needs to be on your `PATH`, or invoke
 it by full path.
+
+A recipe whose build system quietly used the host compiler instead of `qcc` does not get
+this far: staged ELFs are checked at install time (`QNX_ELF_CHECK`), and a host binary is
+a named build error rather than an exec failure on the board.
 
 ## Check the dependency tracking
 
