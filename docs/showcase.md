@@ -13,6 +13,7 @@ because they are what the mechanism was built for.
 
 | | Stage | Feature |
 | --- | --- | --- |
+| 0 | [Get an SDP and a build directory](#0-get-an-sdp-and-a-build-directory) | the two things everything needs |
 | 1 | [Compile a QNX binary](#1-compile-a-qnx-binary) | `qnx-sdp` |
 | 2 | [Put it in a bootable image](#2-put-it-in-a-bootable-image) | `qnx-ifs`, `QNX_IFS_INSTALL` |
 | 3 | [Look inside](#3-look-inside) | `-c dumpifs`, the generated `.build` |
@@ -21,7 +22,7 @@ because they are what the mechanism was built for.
 | 6 | [Reuse an upstream library](#6-reuse-an-upstream-library) | `qnx-autotools`, sysroot handoff |
 | 7 | [Build a stock oe-core recipe](#7-build-a-stock-oe-core-recipe) | `qnx-toolchain` |
 | 8 | [Fetch a prebuilt OSS package](#8-fetch-a-prebuilt-oss-package) | `-c search_oss`, `qnx-apk` |
-| 9 | [Manage the SDP itself](#9-manage-the-sdp-itself) | features, lockfile |
+| 9 | [Install and manage the SDP](#9-install-and-manage-the-sdp) | `-c install_sdp`, features, lockfile |
 | 10 | [A QNX6 filesystem for big payloads](#10-a-qnx6-filesystem-for-big-payloads) | `qnx-rootfs` |
 | 11 | [A flashable disk](#11-a-flashable-disk) | `qnx-disk` |
 | 12 | [Host and guest together](#12-host-and-guest-together) | the whole thing |
@@ -30,6 +31,77 @@ because they are what the mechanism was built for.
 > checks, boot-header byte comparison against the makefile-built image. **Nothing has been
 > run on hardware yet.** Treat stages 11–12 as "builds and inspects correctly", not
 > "boots".
+
+---
+
+## 0. Get an SDP and a build directory
+
+### The bare minimum
+
+Two lines of configuration. Everything else in this layer has a working default.
+
+```bitbake
+MACHINE = "qnx-aarch64le"
+QNX_SDP_ROOT = "/path/to/qnx800"
+```
+
+That is genuinely all, and the second line is only needed to point at an SDP you
+*already have* — `QNX_SDP_ROOT` defaults to `${TOPDIR}/qnx-sdp`, in the same spirit as
+`DL_DIR` and `SSTATE_DIR`, so a fresh build directory works with no paths configured at
+all.
+
+Two more lines are strongly recommended, and both only remove things:
+
+```bitbake
+INHERIT:remove = "uninative"     # a ~50MB glibc shim for native binaries this layer never builds
+INHERIT:remove = "create-spdx"   # nothing here has a CVE database or an SBOM worth generating
+```
+
+`uninative` is worth singling out: it downloads before anything can run, so it is what a
+build appears to hang on when the network is down.
+
+Everything else — `QNX_PROJECT_SRC`, `QNX_SDP_FEATURES`, `QNX_QSC_CLT`,
+`INHERIT += "qnx-toolchain"` — is opt-in, and each is introduced by the stage that needs
+it. A ready-made block with all of them commented out is in
+[`conf/local.conf.sample`](../conf/local.conf.sample).
+
+### Creating the build directory
+
+```bash
+TEMPLATECONF=$PWD/meta-qnx/conf/templates/default source poky/oe-init-build-env build-qnx
+```
+
+Use an **absolute** path. `oe-init-build-env` resolves a relative `TEMPLATECONF` against
+poky rather than the current directory, and fails with `TEMPLATECONF value points to
+nonexistent directory`.
+
+That writes a `bblayers.conf` and a `local.conf` already containing the block above.
+
+### If you do not have an SDP yet
+
+The SDP is licensed and prebuilt — Yocto cannot compile it. It is installed by QNX's own
+tool, which this layer drives. Point at that tool once:
+
+```bitbake
+QNX_QSC_CLT = "/path/to/qnxsoftwarecenter/qnxsoftwarecenter_clt"
+```
+
+then:
+
+```bash
+bitbake -c resolve_sdp qnx-sdp      # preview: what would be installed, and is it satisfiable?
+bitbake -c install_sdp qnx-sdp      # do it -- needs network and your QNX credentials
+bitbake -c write_lockfile qnx-sdp   # record exactly what you got, and commit it
+```
+
+With `QNX_SDP_ROOT` left at its default this installs into `${TOPDIR}/qnx-sdp`, so a
+working SDP and a working build directory come out of the same three commands.
+
+`install_sdp` is deliberately **never a dependency of anything** — it needs credentials,
+mutates a shared multi-gigabyte tree, and the SDP is licensed so its contents must not
+travel through an sstate mirror. Stage 9 covers the rest of this.
+
+→ [getting-started.md](getting-started.md) · [sdp.md](sdp.md)
 
 ---
 
@@ -218,9 +290,10 @@ points at the standard "fetch once and paste" loop.
 
 → [where-things-come-from.md](where-things-come-from.md) · [sdp.md](sdp.md#bitbake--c-search_oss-qnx-sdp)
 
-## 9. Manage the SDP itself
+## 9. Install and manage the SDP
 
-The SDP is not built by Yocto, but what is *in* it can be declared, checked and installed:
+The SDP is not built by Yocto, but what is *in* it can be declared, checked and installed.
+Stage 0 covered the first install; this is the whole surface:
 
 ```bash
 bitbake -c check_sdp qnx-sdp        # does the install match this project? (offline, <1s)

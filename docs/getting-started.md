@@ -27,9 +27,13 @@ checked out beside poky):
 
 ```bash
 cd /path/to/yocto
-TEMPLATECONF=meta-qnx/conf/templates/default source poky/oe-init-build-env build-qnx
+TEMPLATECONF=$PWD/meta-qnx/conf/templates/default source poky/oe-init-build-env build-qnx
 # then point QNX_SDP_ROOT in conf/local.conf at your SDP, if you have one
 ```
+
+> Use an **absolute** path for `TEMPLATECONF`. `oe-init-build-env` resolves a relative one
+> against poky rather than against the current directory, so the short form fails with
+> `Error: TEMPLATECONF value points to nonexistent directory`.
 
 Or by hand, in an existing build directory:
 
@@ -50,23 +54,64 @@ BBLAYERS ?= " \
 
 Nothing here needs `meta-openembedded`, `meta-raspberrypi` or any BSP layer.
 
-Then in `conf/local.conf`. A ready-made block is in
-[`conf/local.conf.sample`](../conf/local.conf.sample) — paste it and adjust the paths:
+### The bare minimum configuration
+
+In `conf/local.conf`, this is the whole of what is required:
 
 ```bitbake
 MACHINE = "qnx-aarch64le"
-
-# Where the SDP is. Defaults to ${TOPDIR}/qnx-sdp, in the same spirit as DL_DIR
-# and SSTATE_DIR, so this line is only needed to use an SDP you already have.
 QNX_SDP_ROOT = "/path/to/qnx800"
-
-# Optional: only needed for recipes that build a working tree in place.
-QNX_PROJECT_SRC = "/path/to/your/qnx-project"
 ```
 
-Do not have an SDP yet? Leave `QNX_SDP_ROOT` alone and run
-`bitbake -c install_sdp qnx-sdp` to create one in the build directory — see
-[sdp.md](sdp.md).
+Every other variable in this layer has a working default. Even the second line is only
+needed to use an SDP you *already have*: `QNX_SDP_ROOT` defaults to `${TOPDIR}/qnx-sdp`,
+in the same spirit as `DL_DIR` and `SSTATE_DIR`, so a fresh build directory works with no
+paths configured at all.
+
+Two more are strongly recommended, and both only take things away — see below for why:
+
+```bitbake
+INHERIT:remove = "uninative"
+INHERIT:remove = "create-spdx"
+```
+
+Everything beyond that is opt-in, and nothing needs it until you want the feature:
+
+| | when you need it |
+| --- | --- |
+| `QNX_PROJECT_SRC` | recipes that build a working tree in place. Unset, those recipes simply do not appear |
+| `QNX_QSC_CLT` | installing or checking SDP packages (below). Builds never use it |
+| `QNX_SDP_FEATURES`, `QNX_SDP_LOCKFILE` | declaring what the SDP should contain — [sdp.md](sdp.md) |
+| `INHERIT += "qnx-toolchain"` | building stock recipes from other layers for QNX — [reusing-layers.md](reusing-layers.md) |
+
+A ready-made block with all of them, commented out, is in
+[`conf/local.conf.sample`](../conf/local.conf.sample).
+
+### Do not have an SDP yet?
+
+The SDP is licensed and prebuilt — Yocto cannot compile it, and this layer never writes to
+it except through the one task below. It is installed by QNX's own Software Center
+command-line tool, which is *not* part of the SDP, so point at it once:
+
+```bitbake
+QNX_QSC_CLT = "/path/to/qnxsoftwarecenter/qnxsoftwarecenter_clt"
+```
+
+Then:
+
+```bash
+bitbake -c resolve_sdp qnx-sdp      # preview: what would be installed, and is it satisfiable?
+bitbake -c install_sdp qnx-sdp      # do it -- needs network and your QNX credentials
+bitbake -c write_lockfile qnx-sdp   # record exactly what you got, and commit it
+```
+
+With `QNX_SDP_ROOT` left at its default this installs into `${TOPDIR}/qnx-sdp`, so those
+three commands give you both a working SDP and a working build directory.
+
+`install_sdp` is deliberately never a dependency of anything — it needs credentials,
+mutates a shared multi-gigabyte tree that other builds may be using, and the SDP is
+licensed so its contents must not travel through an sstate mirror. Full detail, including
+adopting an SDP you already have with `-c write_lockfile`, is in [sdp.md](sdp.md).
 
 ### Two settings worth turning off
 
