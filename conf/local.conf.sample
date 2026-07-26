@@ -22,6 +22,16 @@ QNX_SDP_ROOT = "${TOPDIR}/qnx-sdp"
 # not appear.
 #QNX_PROJECT_SRC = "/path/to/your/qnx-project"
 
+# Build one application from a local checkout instead of fetching it, without
+# editing its recipe. Useful while working on that application, and the way out
+# when its repository is unreachable or has no commits yet: QNX_SRC_REV defaults
+# to AUTOREV, which resolves at *parse* time, so an empty remote halts the whole
+# parse rather than failing the one recipe that needs it.
+#
+# The path is the application directory itself -- a recipe whose repository root
+# is the application sets no QNX_SRC_SUBDIR for it to be joined onto.
+#QNX_SRC_LOCAL:pn-<recipe> = "/path/to/checkout"
+
 # ---------------------------------------------------------------------------
 # SDP package management -- optional, see docs/sdp.md
 # ---------------------------------------------------------------------------
