@@ -17,11 +17,15 @@ The split follows `package.json` / `package-lock.json`:
 | `QNX_SDP_FEATURES` | intent — readable, unpinned | you |
 | the **lockfile** | the resolved result: exact ids and versions | `bitbake -c write_lockfile` |
 
-**You never hand-write a version.** p2 (the provisioning engine
+**Normally you never hand-write a version.** p2 (the provisioning engine
 `qnxsoftwarecenter_clt` wraps) resolves dependencies, `-verifyOnly` proves a
 combination is satisfiable before anything is touched, and the snapshot records
 what it actually chose. Two machines with the same lockfile get the same SDP, and
 regenerating it is a reviewable diff.
+
+The exceptions are real, though, and have their own section — installing a
+package the lockfile has never seen, and holding one back because the newest does
+not fit the rest. See [Choosing versions](#choosing-versions).
 
 If you already have a QNX package list, you probably already have a lockfile: the
 format is exactly what `qnxsoftwarecenter_clt -listInstalledRoots` prints, so an
@@ -86,6 +90,86 @@ QNX_SDP_FEATURES += "my-thing"
 A feature that matches nothing at all warns. Individual patterns that match
 nothing do not — with globs it is normal for a feature to span namespaces an SDP
 does not carry (`host.win.*` on a Linux install).
+
+### Features can only select what the lockfile already has
+
+The one surprising thing about features, and a warning that is easy to misread:
+
+```
+WARNING: QNX_SDP_FEATURE[bsp-rpi5] matched no package in the lockfile.
+```
+
+Patterns are matched **against the lockfile** — that is what keeps versions
+pinned — so a feature is a filter over packages the snapshot already records. It
+cannot pull in something new. Adding a feature for a package that is not
+installed yet does nothing at all.
+
+A first install goes through `QNX_SDP_EXTRA_PACKAGES` instead. Once
+`write_lockfile` has recorded the package, the feature starts matching it and the
+extra entry can go.
+
+## Choosing versions
+
+SDP packages are **not independently versioned**. A Screen build expects a
+matching graphics stack; a BSP expects a matching startup library. "The newest of
+each" is therefore not automatically a combination that works together, so there
+has to be a way to say which version. Three things can, in this order:
+
+| | wins over | use for |
+| --- | --- | --- |
+| `QNX_SDP_PACKAGE_VERSION[<id>]` | everything | holding one package at a version the rest work with |
+| `<id>/<version>` in `QNX_SDP_EXTRA_PACKAGES` | the lockfile | a first install, before the lockfile knows the package |
+| the lockfile | — | the normal case |
+
+If none of them says, the version is left empty and p2 resolves whatever it
+considers newest.
+
+**Pinning a package you already have.** Keyed by full package id — bitbake
+varflag names allow dots:
+
+```bitbake
+QNX_SDP_PACKAGE_VERSION[com.qnx.qnx800.target.screen] = "1.0.0.00135T202511211618L"
+```
+
+**Installing a package at a chosen version.** The lockfile cannot supply a
+version for a package it has never seen, so give one inline, in the same
+`<id>/<version>` form the lockfile and `qnxsoftwarecenter_clt` already use:
+
+```bitbake
+QNX_SDP_EXTRA_PACKAGES = "com.qnx.qnx800.bsp.hw.raspberrypi_bcm2712_rpi5/0.3.0.00381T202512101351L"
+```
+
+Omit the `/<version>` and p2 takes the newest.
+
+To see which versions exist, list the catalogue — the same package often has
+five or six:
+
+```bash
+qnxsoftwarecenter_clt -list -repository https://www.qnx.com/swcenter
+```
+
+### Both mistakes are caught before anything is installed
+
+A pin naming something not selected — a typo, or a package no feature pulls in —
+warns rather than silently leaving the version unset:
+
+```
+WARNING: QNX_SDP_PACKAGE_VERSION pins nothing that is selected:
+com.qnx.qnx800.target.typo. A pin names a full package id, and only affects
+a package some feature or QNX_SDP_EXTRA_PACKAGES already selects.
+```
+
+A version that does not exist is caught by `resolve_sdp`, which runs p2's
+`-verifyOnly` over exactly the set it just printed:
+
+```
+Error: Cannot find com.qnx.qnx800.bsp.hw.raspberrypi_bcm2711_rpi4/9.9.9.NOPE,
+run with -list to check available units
+```
+
+That is the reason to run `-c resolve_sdp` before every `-c install_sdp`: an
+unsatisfiable combination fails there, rather than part-way through mutating a
+multi-gigabyte tree.
 
 ## Tasks
 
@@ -226,7 +310,7 @@ bitbake -c write_lockfile qnx-sdp     # snapshot what is installed
 # commit the lockfile
 ```
 
-**Add a subsystem:**
+**Add a subsystem you already have packages for:**
 
 ```bash
 # QNX_SDP_FEATURES += "screen"
@@ -234,6 +318,27 @@ bitbake -c resolve_sdp qnx-sdp        # what would change, and is it satisfiable
 bitbake -c install_sdp qnx-sdp        # do it
 bitbake -c write_lockfile qnx-sdp     # record the result
 # commit the lockfile diff
+```
+
+**Install a package for the first time.** A feature will not do it — features
+filter the lockfile, and the lockfile has never heard of this package. Name it
+directly, with a version if the newest is not the one you want:
+
+```bash
+# QNX_SDP_EXTRA_PACKAGES = "com.qnx.qnx800.bsp.hw.raspberrypi_bcm2712_rpi5/0.3.0.00381T202512101351L"
+bitbake -c resolve_sdp qnx-sdp        # confirms the version exists and the set resolves
+bitbake -c install_sdp qnx-sdp
+bitbake -c write_lockfile qnx-sdp     # now the lockfile records it
+# ...and QNX_SDP_EXTRA_PACKAGES can go: a feature matching it works from here on
+```
+
+**Hold a package back because a newer one does not fit the rest:**
+
+```bash
+# QNX_SDP_PACKAGE_VERSION[com.qnx.qnx800.target.screen] = "1.0.0.00135T202511211618L"
+bitbake -c resolve_sdp qnx-sdp        # -verifyOnly proves the combination is satisfiable
+bitbake -c install_sdp qnx-sdp
+bitbake -c write_lockfile qnx-sdp
 ```
 
 **Somebody else changed the lockfile:**

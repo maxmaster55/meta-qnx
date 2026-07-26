@@ -626,8 +626,9 @@ artifacts into the host's data partition via a bbappend on the rootfs recipe tha
 | `QNX_SDP_PKG_PREFIX` | `com.qnx.${QNX_SDP_VERSION}` | |
 | `QNX_SDP_FEATURES` | `""` | feature names to install |
 | `QNX_SDP_FEATURE[name]` | *(see `conf/qnx-sdp-features.inc`)* | glob patterns defining a feature |
-| `QNX_SDP_LOCKFILE` | `""` | resolved `<id>/<version>` snapshot |
-| `QNX_SDP_EXTRA_PACKAGES` | `""` | ids to install regardless of features |
+| `QNX_SDP_LOCKFILE` | `""` | resolved `<id>/<version>` snapshot. Features match **against this**, so they cannot select a package it does not list |
+| `QNX_SDP_EXTRA_PACKAGES` | `""` | packages to install regardless of features, as `<id>` or `<id>/<version>`. The only way to install one not yet in the lockfile |
+| `QNX_SDP_PACKAGE_VERSION[id]` | *(unset)* | pin one package to a version; beats both the lockfile and `QNX_SDP_EXTRA_PACKAGES` |
 | `QNX_SDP_EXCLUDE_PACKAGES` | `""` | id patterns to keep out |
 | `QNX_SDP_REQUIRES` | `""` | packages this recipe needs; verified by `check_sdp` |
 | `QNX_SDP_SEARCH` | `""` | filter for `-c search` |

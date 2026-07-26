@@ -304,9 +304,9 @@ bitbake -c write_lockfile qnx-sdp   # record the result
 ```
 
 The split follows `package.json` / `package-lock.json`: `QNX_SDP_FEATURES` is readable
-intent, the lockfile is the resolved snapshot. **You never hand-write a version.** Image
-builds depend on `check_sdp` by default, so a missing package is a named error instead of
-`Host file 'x' not available` with a build-file line number.
+intent, the lockfile is the resolved snapshot. Image builds depend on `check_sdp` by
+default, so a missing package is a named error instead of `Host file 'x' not available`
+with a build-file line number.
 
 Features are namespace **glob patterns**, not enumerations, which is why a subsystem is two
 patterns rather than forty package ids:
@@ -315,6 +315,37 @@ patterns rather than forty package ids:
 QNX_SDP_FEATURE[networking] = "target.net.*"
 QNX_SDP_FEATURES += "networking"
 ```
+
+### Versions are usually resolved for you, and sometimes have to be chosen
+
+Ordinarily the lockfile decides and you never type a version. But SDP packages are **not
+independently versioned** — a Screen build expects a matching graphics stack, a BSP a
+matching startup library — so "the newest of each" is not always a combination that works.
+Two ways to say otherwise:
+
+```bitbake
+# Hold one package where the rest of the set works with it. Beats the lockfile.
+QNX_SDP_PACKAGE_VERSION[com.qnx.qnx800.target.screen] = "1.0.0.00135T202511211618L"
+
+# Install something the lockfile has never seen, at a chosen version.
+QNX_SDP_EXTRA_PACKAGES = "com.qnx.qnx800.bsp.hw.raspberrypi_bcm2712_rpi5/0.3.0.00381T202512101351L"
+```
+
+That second one is not a shortcut — it is the *only* route for a first install. A feature
+cannot do it: patterns are matched against the lockfile, so a feature filters what you
+already have and can never pull in something new. Add the package here, install, then
+`write_lockfile`; from then on a feature matches it and the extra entry can go.
+
+Both mistakes are caught before your SDP is touched. A pin naming nothing selected warns,
+and `resolve_sdp` runs p2's `-verifyOnly` over exactly the set it printed:
+
+```
+Error: Cannot find com.qnx.qnx800.bsp.hw.raspberrypi_bcm2711_rpi4/9.9.9.NOPE,
+run with -list to check available units
+```
+
+Which is why `-c resolve_sdp` comes before every `-c install_sdp`: an unsatisfiable
+combination fails there, not part-way through mutating a multi-gigabyte tree.
 
 → [sdp.md](sdp.md)
 
