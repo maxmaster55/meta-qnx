@@ -69,9 +69,37 @@ QNX_SDP_FEATURES ?= ""
 # package list files use, so an existing list can be adopted unchanged.
 QNX_SDP_LOCKFILE ?= ""
 
-# Extra package ids to install regardless of features, and ids to keep out.
+# Extra packages to install regardless of features, and ids to keep out.
+#
+# An entry may carry a version, in the same "<id>/<version>" form the lockfile
+# uses. This is the only way to install something at a chosen version before it
+# is in the lockfile: features can only select what the lockfile already
+# records, so anything being installed for the first time comes through here.
+#
+#     QNX_SDP_EXTRA_PACKAGES = "com.qnx.qnx800.bsp.hw.raspberrypi_bcm2712_rpi5/0.3.0.00381T202512101351L"
+#
+# Without a version, p2 resolves whatever it considers newest.
 QNX_SDP_EXTRA_PACKAGES ?= ""
 QNX_SDP_EXCLUDE_PACKAGES ?= ""
+
+# Pin an individual package to a version, whatever the lockfile says.
+#
+#     QNX_SDP_PACKAGE_VERSION[com.qnx.qnx800.target.screen] = "1.0.0.00135T202511211618L"
+#
+# SDP packages are not independently versioned -- a Screen build expects a
+# matching graphics stack, a BSP a matching startup library -- so "the newest of
+# each" is not automatically a combination that works together. This is the
+# override for when it is not, and it wins over both the lockfile and any
+# version given in QNX_SDP_EXTRA_PACKAGES. `-c resolve_sdp` runs p2's
+# -verifyOnly over the result, so a combination can be checked before it is
+# installed.
+#
+# Keyed by full package id -- bitbake varflag names allow dots.
+QNX_SDP_PACKAGE_VERSION[dummy] ?= ""
+
+# Varflags do not participate in task signatures, so a pin would otherwise
+# change nothing that any task depends on.
+QNX_SDP_PACKAGE_VERSION_SIG = "${@qnx_sdp_version_pins_repr(d)}"
 
 # Substring filter for `bitbake -c search qnx-sdp`. Empty lists everything.
 QNX_SDP_SEARCH ?= ""
@@ -141,12 +169,40 @@ def qnx_sdp_read_lockfile(d, path=None):
     return packages
 
 
+def qnx_sdp_version_pins(d):
+    """QNX_SDP_PACKAGE_VERSION as a plain {id: version} dict.
+
+    getVarFlags returns bitbake's own bookkeeping alongside what the user set,
+    and those must not be mistaken for package ids."""
+    flags = d.getVarFlags('QNX_SDP_PACKAGE_VERSION') or {}
+    return {k: v.strip() for k, v in flags.items()
+            if not k.startswith('_')
+            and k not in ('doc', 'export', 'dummy', 'vardeps',
+                          'vardepsexclude', 'vardepvalue')
+            and v.strip()}
+
+
+def qnx_sdp_version_pins_repr(d):
+    return repr(sorted(qnx_sdp_version_pins(d).items()))
+
+
 def qnx_sdp_selected_packages(d):
     """Resolve QNX_SDP_FEATURES against the lockfile into concrete ids.
 
     Patterns are matched against the lockfile's ids, which is what keeps
     versions pinned: a feature says "everything under target.net", the lockfile
     says which packages that was and at what version when it was last resolved.
+
+    Three things can say what version a package should be, in order:
+
+      QNX_SDP_PACKAGE_VERSION[id]   an explicit pin, for when the newest of
+                                    everything is not a working combination
+      "<id>/<version>" in QNX_SDP_EXTRA_PACKAGES
+                                    a first install, before the lockfile knows
+                                    the package exists
+      the lockfile                  the normal case
+
+    and if none of them does, the version is left empty and p2 chooses.
     """
     import fnmatch
 
@@ -154,6 +210,7 @@ def qnx_sdp_selected_packages(d):
     patterns = qnx_sdp_feature_patterns(d)
     wanted = (d.getVar('QNX_SDP_FEATURES') or '').split()
     excluded = (d.getVar('QNX_SDP_EXCLUDE_PACKAGES') or '').split()
+    pins = qnx_sdp_version_pins(d)
 
     unknown = [f for f in wanted if f not in patterns]
     if unknown:
@@ -179,9 +236,24 @@ def qnx_sdp_selected_packages(d):
                     % (feature, ' '.join(patterns[feature])))
         selected.update(found)
 
-    selected.update(p for p in (d.getVar('QNX_SDP_EXTRA_PACKAGES') or '').split())
+    # Extras may carry their own version, which the lockfile cannot supply for a
+    # package it has never seen.
+    extra_versions = {}
+    for entry in (d.getVar('QNX_SDP_EXTRA_PACKAGES') or '').split():
+        pkg, _, version = entry.partition('/')
+        selected.add(pkg)
+        if version:
+            extra_versions[pkg] = version
 
     for pattern in excluded:
         selected.difference_update(fnmatch.filter(selected, pattern))
 
-    return {pkg: locked.get(pkg, '') for pkg in sorted(selected)}
+    unused = sorted(set(pins) - selected)
+    if unused:
+        bb.warn("QNX_SDP_PACKAGE_VERSION pins nothing that is selected: %s. "
+                "A pin names a full package id, and only affects a package some "
+                "feature or QNX_SDP_EXTRA_PACKAGES already selects."
+                % ', '.join(unused))
+
+    return {pkg: pins.get(pkg) or extra_versions.get(pkg) or locked.get(pkg, '')
+            for pkg in sorted(selected)}
