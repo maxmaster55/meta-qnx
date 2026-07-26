@@ -66,6 +66,16 @@ QNX_COMPONENT_ATTR[dummy] ?= ""
 QNX_COMPONENT_DEST_SIG = "${@qnx_ifs_flags_repr(d, 'QNX_COMPONENT_DEST')}"
 QNX_COMPONENT_ATTR_SIG = "${@qnx_ifs_flags_repr(d, 'QNX_COMPONENT_ATTR')}"
 
+# Declared here as well as in qnx-sdp and qnx-toolchain, and that duplication is
+# deliberate. A component inherits neither: it compiles nothing, so it wants
+# none of qnx-sdp's toolchain surgery. Without this line QNX_TARGET is defined
+# only when one of those classes happens to be in the build -- and
+# `INHERIT += "qnx-toolchain"` is commented out in the shipped local.conf, so in
+# a default build every component would resolve its files against an empty path
+# and quietly contribute nothing. QNX_SDP_ROOT comes from layer.conf and
+# QNX_PROCESSOR from the machine conf, so those are always present.
+QNX_TARGET ?= "${QNX_SDP_ROOT}/target/qnx"
+
 # Where to look. The SDP by default; a board layer prepends its BSP install tree
 # for drivers the SDP does not ship (devb-sdmmc-bcm2712 and friends). Searched
 # left to right, so a BSP build of a name the SDP also has wins -- the same
@@ -102,6 +112,19 @@ do_configure[noexec] = "1"
 do_compile[noexec] = "1"
 do_install[dirs] = "${D}"
 
+# A component is nothing but names of SDP files, so without an SDP there is
+# nothing it can describe. Skipping matches what qnx-sdp.bbclass does for
+# recipes that compile against one, and keeps "no SDP yet" a single actionable
+# message rather than one failure per component.
+python () {
+    import os
+    target = d.getVar('QNX_TARGET') or ''
+    if not os.path.isdir(target):
+        raise bb.parse.SkipRecipe(
+            "no SDP at '%s'. Point QNX_SDP_ROOT at an existing install, or run "
+            "'bitbake -c install_sdp qnx-sdp' to create one." % target)
+}
+
 
 def qnx_component_search_dirs(d):
     """(host directory, image directory) pairs, in mkifs's own order."""
@@ -130,6 +153,16 @@ def qnx_component_records(d):
     pn = d.getVar('PN')
     names = (d.getVar('QNX_COMPONENT_FILES') or '').split()
     if not names:
+        return ''
+
+    # No SDP at all is not this class's error to report. qnx-sdp.bbclass already
+    # raises SkipRecipe with a message that says what to do about it, and the
+    # guard below does the same for components -- but this function is called
+    # during variable expansion, which happens whether or not a recipe is going
+    # to be skipped. Failing here would turn "you have not installed an SDP yet"
+    # into a parse error from every component at once, burying the one message
+    # that is worth reading.
+    if not os.path.isdir(d.getVar('QNX_TARGET') or ''):
         return ''
 
     search_dirs = qnx_component_search_dirs(d)
