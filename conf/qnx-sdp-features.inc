@@ -16,9 +16,19 @@
 #
 # To discover what exists:  bitbake -c search qnx-sdp
 
+# NOTE ON PATTERNS: "target.base.*" does NOT match "target.base" -- fnmatch
+# requires something after the dot. QNX ships several packages named after a
+# bare namespace as well as children of it, so a feature meant to cover a whole
+# namespace has to name both. Getting this wrong is quiet: the feature still
+# matches dozens of packages, just not the one holding the namespace's own
+# content, and the gap only shows up as a missing file at image build time.
+
 # --- essential ------------------------------------------------------------
 # The OS itself: kernel, libc, base runtime.
-QNX_SDP_FEATURE[core] = "target.base.* target.microkernel.* target.os_services.*"
+QNX_SDP_FEATURE[core] = "target target.base target.base.* target.binutils \
+                         target.microkernel.* target.os_services.* \
+                         target.hw target.libbacktrace target.memstream \
+                         target.notify_fd target.text.* target.tools.*"
 
 # Host-side compiler, binutils, mkifs, mkxfs and the rest of the build tooling.
 # Without this there is nothing to build with.
@@ -30,11 +40,16 @@ QNX_SDP_FEATURE[utils] = "osr.toybox target.utils.*"
 
 # --- subsystems -----------------------------------------------------------
 QNX_SDP_FEATURE[networking] = "target.net.*"
-QNX_SDP_FEATURE[filesystems] = "target.fs.*"
-QNX_SDP_FEATURE[storage] = "target.driver.* target.sf.*"
+QNX_SDP_FEATURE[filesystems] = "target.fs.* target.fsp.*"
+QNX_SDP_FEATURE[storage] = "target.driver.* target.drivers.* target.sf.*"
 QNX_SDP_FEATURE[pci] = "target.pci.*"
 QNX_SDP_FEATURE[usb] = "target.usb.*"
 QNX_SDP_FEATURE[security] = "target.security.*"
+QNX_SDP_FEATURE[input] = "target.input.*"
+
+# devc-* lives here, including devc-pty -- which qconn needs, and which is the
+# kind of thing you discover from `Host file 'devc-pty' not available` rather
+# than from the name "connectivity".
 QNX_SDP_FEATURE[connectivity] = "target.connectivity.*"
 
 # --- graphics and multimedia ---------------------------------------------
@@ -74,6 +89,11 @@ QNX_SDP_FEATURE[bsp-hw] = "bsp.hw.*"
 # to a prebuilt BSP checkout.
 QNX_SDP_FEATURE[bsp-rpi5] = "bsp.hw.raspberrypi_bcm2712_rpi5"
 QNX_SDP_FEATURE[bsp-rpi4] = "bsp.hw.raspberrypi_bcm2711_rpi4"
+
+# The board-level i2c and spi packages, which are target.bsp.* rather than
+# bsp.hw.* -- a different namespace despite the name, and covered by neither of
+# the patterns above.
+QNX_SDP_FEATURE[bsp-buses] = "target.bsp.*"
 
 # The board's graphics and wifi packages, which ship separately from the BSP.
 # cypress_dhd_sdio_rpi5 is the wifi firmware the host image reports missing.

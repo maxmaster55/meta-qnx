@@ -118,11 +118,30 @@ do_install[dirs] = "${D}"
 # message rather than one failure per component.
 python () {
     import os
+
     target = d.getVar('QNX_TARGET') or ''
     if not os.path.isdir(target):
         raise bb.parse.SkipRecipe(
             "no SDP at '%s'. Point QNX_SDP_ROOT at an existing install, or run "
             "'bitbake -c install_sdp qnx-sdp' to create one." % target)
+
+    # Which files are missing, reported once, here, where the answer can be
+    # SkipRecipe rather than a parse-wide fatal.
+    search_dirs = qnx_component_search_dirs(d)
+    optional = set((d.getVar('QNX_COMPONENT_OPTIONAL') or '').split())
+    missing = [name for name in (d.getVar('QNX_COMPONENT_FILES') or '').split()
+               if name not in optional
+               and not any(os.path.exists(os.path.join(host_dir, name))
+                           for host_dir, _ in search_dirs)]
+
+    if missing:
+        raise bb.parse.SkipRecipe(
+            "not found under %s: %s. These are the SDP or BSP files this "
+            "component consists of -- either the SDP lacks the package "
+            "providing them (see QNX_SDP_FEATURES), or a name is wrong. List "
+            "them in QNX_COMPONENT_OPTIONAL if they are genuinely optional."
+            % (' '.join((d.getVar('QNX_COMPONENT_ROOTS') or '').split()),
+               ', '.join(missing)))
 }
 
 
@@ -197,14 +216,14 @@ def qnx_component_records(d):
         prefix = '[%s] ' % attr if attr else ''
         records.append('%s%s=%s' % (prefix, dest, name))
 
+    # Deliberately not fatal here. This function runs during variable expansion,
+    # which happens for every recipe whether or not it would be skipped, so a
+    # bb.fatal takes the whole parse down -- one component missing one driver
+    # and nothing else in the tree can be built or even queried. The anonymous
+    # python below raises SkipRecipe for the same condition, which fails only
+    # this recipe and anything that asked for it.
     if missing:
-        bb.fatal("%s: not found under %s:\n  %s\n"
-                 "These are SDP or BSP files this component is made of. Either "
-                 "the SDP lacks the package that provides them (see "
-                 "QNX_SDP_FEATURES), or the name is wrong. List them in "
-                 "QNX_COMPONENT_OPTIONAL if they are genuinely optional."
-                 % (pn, ' '.join((d.getVar('QNX_COMPONENT_ROOTS') or '').split()),
-                    '\n  '.join(missing)))
+        bb.debug(1, "%s: unresolved: %s" % (pn, ' '.join(missing)))
 
     return '\n'.join(records)
 
