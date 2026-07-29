@@ -22,6 +22,34 @@ QNX_SDP_ROOT = "${TOPDIR}/qnx-sdp"
 #QNX_PROJECT_SRC = "/path/to/your/qnx-project"
 
 # ---------------------------------------------------------------------------
+# Settings the project layers add
+# ---------------------------------------------------------------------------
+# meta-qnx itself is mechanism and knows nothing about any board, so nothing
+# below is defined unless meta-qnx-hyp / meta-qnx-guest are in the build. They
+# are all `?=` in their recipes, so setting one here overrides it without
+# editing a layer. The full list, and which values have to agree with which
+# others, is in meta-qnx/docs/configuration.md.
+#
+# The one most builds want. It points at a wpa_supplicant.conf holding the
+# network passphrase, which is why it is a path and not the credentials
+# themselves -- keep the file outside the repository. Left unset, a placeholder
+# is installed, the build warns, and the board comes up without wifi.
+#QNX_HOST_CONF_WIFI = "/path/to/wpa_supplicant.conf"
+
+# The board's own address on the LAN. Static rather than DHCP because the board
+# is the gateway for the guest networks, and a lease that changed would break
+# their routing with nothing said about it.
+#QNX_HOST_BRIDGE_IP = "192.168.2.2"
+#QNX_HOST_GATEWAY = "192.168.2.1"
+
+# The guest's panel. Changing these two is NOT sufficient on its own -- the same
+# size appears in two Screen configuration files in the qnx-host-conf
+# repository, and a mismatch shows the guest in a corner of the display rather
+# than failing. See the worked example in docs/configuration.md.
+#QNX_GUEST_SCANOUT_WIDTH = "1024"
+#QNX_GUEST_SCANOUT_HEIGHT = "600"
+
+# ---------------------------------------------------------------------------
 # SDP package management -- optional, see meta-qnx/docs/sdp.md
 # ---------------------------------------------------------------------------
 # The QNX Software Center command-line tool. Needed only to check, search or
