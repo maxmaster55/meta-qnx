@@ -105,7 +105,10 @@ QNX_IFS_TOYBOX_CMDS ?= "ls cat cp mv rm mkdir rmdir ln touch chmod chown \
                         wc cmp diff du df stat file readlink realpath \
                         date uname id groups whoami hostname \
                         tar gzip gunzip zcat md5sum sha1sum cksum \
-                        more nl seq sleep tee test true false yes clear"
+                        more nl seq sleep tee test true false yes clear \
+                        dd od xxd split comm paste expand cpio patch strings \
+                        install link unlink mkfifo mktemp logname nohup time \
+                        timeout truncate tty expr base64 cal chgrp uuidgen"
 
 # Recipe-provided:
 #   QNX_IFS_NAME     -- basename of the image, also passed to mkifs -a
