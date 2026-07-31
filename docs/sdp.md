@@ -346,6 +346,49 @@ SDP is untouched throughout, which is the point: reverting is one line in
 > `-setPolicy` takes `liberal`, `conservative` or `ultraconservative`. The
 > default is conservative, which will not move a package that is already
 > installed — so an upgrade appears to succeed while changing nothing.
+>
+> `liberal` is right for solving a fresh baseline and wrong for touching one
+> package in a working SDP: it prefers the newest of everything it is free to
+> move, which silently splits matched sets. Changing the kernel this way pulled
+> `net.iosock` from `0.3.0.00600` to `0.5.0.00015` while every module —
+> `modsphy`, `devspci`, `devsfdt`, `vdevpeernet` — stayed on the older train.
+> io-sock then loaded and could `dlopen` none of them, which on the board looks
+> like this and reads as a missing file rather than a version split:
+>
+> ```
+> Unable to access /dev/io-sock/mods-vdevpeer-net.so
+> ifconfig: interface cgem0 does not exist
+> ```
+>
+> When an SDP that worked stops working after a package change, diff it against
+> the one that worked before theorising:
+>
+> ```bash
+> diff <(qnxsoftwarecenter_clt -listInstalled -destination OLD | sort) \
+>      <(qnxsoftwarecenter_clt -listInstalled -destination NEW | sort)
+> ```
+>
+> That named the two changed packages out of 294 in one step.
+
+## Meta-packages anchor more than they look
+
+`target.hypervisor.group` is worth installing *around* rather than through. Its
+`[2.4.0.0,2.4.1)` requirement on `microkernel.core` is the group's alone —
+`hypervisor.core` itself requires only `libc.so.6`, so taking the group pins the
+kernel a release train back for no technical reason, and an older kernel breaks
+`pidin` (its introspection client is compiled in, and talks to the kernel).
+
+But the group is not only metadata. It anchors `net.vdevpeernet` (which ships
+`vpctl` and `mods-vdevpeer-net.so`), `driver.virtio`, `hypervisor.libhyp` and
+the guest BSP. Uninstalling it orphans all four, and p2 then drops
+`hypervisor.core`/`extras`/`vdev.devel` too if they were only ever recorded as
+dependencies — which is what happens when the group installed them.
+
+So install the leaves *and* what the group anchored, explicitly, in one
+transaction. p2 will not promote an already-installed package to a root, so
+anything installed as a dependency is fair game for a later garbage collection:
+check with `-listInstalledRoots`, and put anything missing in
+`QNX_SDP_EXTRA_PACKAGES` — `write_lockfile` records roots only.
 
 > Valid credentials matter more than they look. A wrong password produces
 > `HttpUnauthorizedException: Authentication failed` on *downloads* while the
