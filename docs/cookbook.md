@@ -616,11 +616,31 @@ Then:
 
 ```bash
 bitbake -c dumpifs my-image             # build if needed, print contents -- no PATH setup
+bitbake -c dumpbuild my-image           # print the generated build file
 dumpifs my-image.ifs                    # contents (needs $QNX_HOST/usr/bin on PATH)
 dumpifs -v my-image.ifs                 # ...with uid/gid/mode
 dumpifs -b my-image.ifs                 # basenames only
 bitbake -c generate_buildfile my-image  # regenerate without running mkifs
 ```
+
+The two dumps answer different questions. `dumpifs` says what ended up in the
+image; `dumpbuild` says what was asked for. When a file is missing, it is missing
+from one or the other, and that tells you whether to look at the template and
+`QNX_IFS_EXTRA_ENTRIES`, or at mkifs and its search paths.
+
+`dumpbuild` is not IFS-only — it works on anything inheriting `qnx-ifs`,
+`qnx-rootfs` or `qnx-disk`:
+
+```bash
+bitbake -c dumpbuild qnx-host-image     # the IFS build file
+bitbake -c dumpbuild qnx-host-data      # the QNX6 rootfs build file
+bitbake -c dumpbuild qnx-host-disk      # boot.build, and disk.cfg once built
+```
+
+It runs after the generating task, not after the image is built, so it costs
+nothing on a disk target and works when the image build itself is what failed.
+On `qnx-host-data` it is the only place the `QNX_ROOTFS_EXTRA` records
+contributed by other layers become visible.
 
 ### Common errors
 

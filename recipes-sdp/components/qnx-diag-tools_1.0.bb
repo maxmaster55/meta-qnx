@@ -35,6 +35,12 @@ QNX_COMPONENT_FILES = "\
     libbacktrace.so \
 "
 
+# Where the reference host image puts these, rather than where the SDP keeps
+# them. traceprinter is in the SDP's usr/bin and the reference has it in
+# usr/sbin; libbacktrace is the other way round.
+QNX_COMPONENT_DEST[traceprinter] = "/usr/sbin/traceprinter"
+QNX_COMPONENT_DEST[libbacktrace.so] = "/usr/lib/libbacktrace.so"
+
 # devc-pty is deliberately NOT listed, though qconn needs a pty: the RPi5 host
 # image's own build file already ships it, and a second record is not a harmless
 # duplicate -- mkifs stops with "Entry 'sbin/devc-pty' redefined". An image that

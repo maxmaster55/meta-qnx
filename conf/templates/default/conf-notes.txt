@@ -12,4 +12,9 @@ With meta-qnx-hyp / meta-qnx-guest added to conf/bblayers.conf:
     qnx-guest-image     guest IFS
     qnx-host-disk       flashable SD card image carrying both
 
-Inspect a built image with:  bitbake -c dumpifs qnx-ifs-hello
+Inspect an image with:
+    bitbake -c dumpifs   qnx-ifs-hello    what ended up in the image
+    bitbake -c dumpbuild qnx-ifs-hello    the build file that asked for it
+
+dumpbuild works on any IFS, rootfs or disk target, and does not build the
+image first -- it is the quickest way to see why something is missing.

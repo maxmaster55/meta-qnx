@@ -20,11 +20,40 @@ QNX_COMPONENT_FILES = "\
     libEGL.so \
     libGLESv2.so \
     libgbm.so \
-    libdrm.so \
+    libdrm.so.2 \
     libWFD.so \
     libmemobj.so \
     libswblit.so \
 "
+
+# ---------------------------------------------------------------------------
+# Destinations, so that this component puts things where the reference images
+# put them
+# ---------------------------------------------------------------------------
+# Without these, each file lands wherever the SDP happens to keep it -- which for
+# most of Screen's libraries is usr/lib, while both reference build files place
+# them in /lib. Both directories are on every image's LD_LIBRARY_PATH, so nothing
+# failed; the images simply did not match the ones they were modelled on, and a
+# script or a document naming an absolute path would have been wrong.
+#
+# libscrmem, libmemobj and libimg are absent from this list because the SDP
+# already keeps them in lib/ and they resolve there by themselves.
+QNX_COMPONENT_DEST[screen] = "/bin/screen"
+QNX_COMPONENT_DEST[libscreen.so] = "/lib/libscreen.so"
+QNX_COMPONENT_DEST[libEGL.so] = "/lib/libEGL.so"
+QNX_COMPONENT_DEST[libGLESv2.so] = "/lib/libGLESv2.so"
+QNX_COMPONENT_DEST[libgbm.so] = "/lib/libgbm.so"
+QNX_COMPONENT_DEST[libWFD.so] = "/lib/libWFD.so"
+QNX_COMPONENT_DEST[libswblit.so] = "/lib/libswblit.so"
+
+# libdrm is named by its versioned soname rather than as libdrm.so, and that is
+# deliberate. The SDP's usr/lib/libdrm.so points at libdrm.so.1, but everything
+# in the graphics stack -- v3d_dri.so, libWFDrpi5.so, screen-alloc-rpi5.so --
+# has DT_NEEDED libdrm.so.2, and .so.2 is what the reference images carry. Naming
+# the unversioned symlink would drag in the .so.1 chain instead and leave the
+# soname anything actually links against to be found by the dependency closure,
+# at a different path.
+QNX_COMPONENT_DEST[libdrm.so.2] = "/lib/libdrm.so.2"
 
 # Screen dlopens these by name from lib/dll. screen-sw is the software
 # rasteriser it falls back to with no GPU, screen-stdbuf the default buffer
@@ -37,7 +66,10 @@ QNX_COMPONENT_FILES += "\
     screen-debug.so \
 "
 
-# A compatibility alias, and the only entry here that is not a file.
+# Two links, and the only entries here that are not files.
+#
+# libdrm.so: named by soname above, so the unversioned name every other build
+# system expects has to be added back. The reference points it at .so.2 as well.
 #
 # The SDP ships libGLESv2 with soname libGLESv2.so.1. Some callers ask for
 # libGLESv2.so.2 -- the soname the same library has on Linux -- and they ask for
@@ -54,10 +86,13 @@ QNX_COMPONENT_FILES += "\
 #
 # The reference image carries the same link for the same reason.
 #
-# The target is relative on purpose: a symlink target without a leading slash
-# resolves against the link's own directory, so this finds the libGLESv2.so.1
-# staged beside it whichever directory the component resolved into.
-QNX_IFS_EXTRA_ENTRIES = "[type=link] /usr/lib/libGLESv2.so.2=libGLESv2.so.1"
+# The targets are relative on purpose: a symlink target without a leading slash
+# resolves against the link's own directory, so each finds the library staged
+# beside it.
+QNX_IFS_EXTRA_ENTRIES = "\
+[type=link] /lib/libGLESv2.so.2=libGLESv2.so.1\n\
+[type=link] /lib/libdrm.so=libdrm.so.2\
+"
 
 # The image codecs libimg loads, one per format.
 QNX_COMPONENT_FILES += "\

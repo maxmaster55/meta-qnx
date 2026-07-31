@@ -213,6 +213,64 @@ QNX_ELF_CHECK_DIRS = "${QNX_STAGE_DIR}"
 do_install[postfuncs] += "qnx_image_write_dropins qnx_image_check_elfs"
 
 # ---------------------------------------------------------------------------
+# dumpbuild -- see the build file that was generated
+# ---------------------------------------------------------------------------
+# `bitbake -c dumpbuild <image>` prints the generated .build file on the
+# console, generating it first if needed.
+#
+# The counterpart to dumpifs. dumpifs answers "what ended up in the image";
+# this answers "what did we ask for", which is the question when something is
+# missing -- an entry the automatic dependency pass never added, a marker that
+# expanded to the wrong path, a fragment that was not included. Those are
+# invisible in the finished image and obvious here.
+#
+# The file is also deployed beside the image, so this is a convenience rather
+# than the only way to read it. It saves knowing which of ${B} or the deploy
+# directory to look in, and what the file is called for this particular recipe.
+#
+# Set by whichever class generates one. Space separated, because the disk
+# produces two.
+#
+# The function lives here but the task does not: qnx-ifs, qnx-rootfs and
+# qnx-disk each `addtask dumpbuild` after their own generating task, since that
+# is the only ordering that makes sense per class. A plain qnx-sdp recipe
+# therefore has no dumpbuild at all, and bitbake says so better than this could
+# ("Task do_dumpbuild does not exist for target x. Close matches: do_build").
+# The guard below is for an image recipe that deliberately empties this.
+QNX_BUILDFILES ?= ""
+
+python do_dumpbuild() {
+    import os
+
+    files = (d.getVar('QNX_BUILDFILES') or '').split()
+    if not files:
+        bb.fatal("%s generates no build file. dumpbuild works on recipes that "
+                 "inherit qnx-ifs, qnx-rootfs or qnx-disk."
+                 % d.getVar('PN'))
+
+    missing = []
+    for path in files:
+        if not os.path.isfile(path):
+            missing.append(path)
+            continue
+        # bb.plain rather than a shell task: a shell task's stdout only reaches
+        # the log file, and the point of this is to appear on the console.
+        bb.plain("### %s\n%s" % (path, open(path).read()))
+
+    # Only fatal when nothing at all was printed. The disk names two files and
+    # the second is written by a later task, so a partial result is normal and
+    # still worth showing.
+    if len(missing) == len(files):
+        bb.fatal("none of the expected build files exist: %s -- did the "
+                 "generating task run?" % ' '.join(missing))
+    for path in missing:
+        bb.warn("%s does not exist yet" % path)
+}
+do_dumpbuild[nostamp] = "1"
+do_dumpbuild[doc] = "Print the generated build file"
+
+
+# ---------------------------------------------------------------------------
 # Template includes
 # ---------------------------------------------------------------------------
 # Directories searched for `#include` fragments in a .build template, in order.

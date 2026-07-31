@@ -16,7 +16,7 @@ because they are what the mechanism was built for.
 | 0 | [Get an SDP and a build directory](#0-get-an-sdp-and-a-build-directory) | the two things everything needs |
 | 1 | [Compile a QNX binary](#1-compile-a-qnx-binary) | `qnx-sdp` |
 | 2 | [Put it in a bootable image](#2-put-it-in-a-bootable-image) | `qnx-ifs`, `QNX_IFS_INSTALL` |
-| 3 | [Look inside](#3-look-inside) | `-c dumpifs`, the generated `.build` |
+| 3 | [Look inside](#3-look-inside) | `-c dumpifs`, `-c dumpbuild` |
 | 4 | [Watch dependency tracking work](#4-watch-dependency-tracking-work) | the reason for all this |
 | 5 | [Add a second app, and order the boot](#5-add-a-second-app-and-order-the-boot) | `STARTUP_AFTER`, `WAITFOR` |
 | 6 | [Reuse an upstream library](#6-reuse-an-upstream-library) | `qnx-autotools`, sysroot handoff |
@@ -158,7 +158,13 @@ bitbake -c dumpifs qnx-ifs-hello
 ```
 
 No `PATH` setup, no finding the image by hand. But the more useful artifact is the
-**generated build file**, deployed next to the `.ifs`:
+**generated build file**:
+
+```bash
+bitbake -c dumpbuild qnx-ifs-hello
+```
+
+It is deployed next to the `.ifs` as well, if you would rather page through it:
 
 ```bash
 less tmp/deploy/images/qnx-aarch64le/qnx-ifs-hello.build

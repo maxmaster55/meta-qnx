@@ -110,6 +110,25 @@ QNX_IFS_TOYBOX_CMDS ?= "ls cat cp mv rm mkdir rmdir ln touch chmod chown \
                         install link unlink mkfifo mktemp logname nohup time \
                         timeout truncate tty expr base64 cal chgrp uuidgen"
 
+# Where the links go. /usr/bin for almost everything, with a short list of core
+# commands at /bin instead -- which is exactly how the reference images do it,
+# 82 links in one directory and 13 in the other, identically in host and guest.
+#
+# Both directories are on PATH, so this is not about resolution. It is about the
+# handful of commands that a script may reasonably name by absolute path, and
+# about /bin being populated at all: a boot script or a shebang that says
+# /bin/sh or /bin/cat should find one.
+#
+# This used to put every link in /bin, which moved 82 commands per image relative
+# to the reference for no reason anyone chose.
+QNX_IFS_TOYBOX_LINK_DIR ?= "/usr/bin"
+
+# df and hostname are here because the reference has them at /bin too -- as real
+# SDP binaries rather than toybox links, but at /bin, and a script naming
+# /bin/hostname should not care which it got.
+QNX_IFS_TOYBOX_BIN_CMDS ?= "cat chmod cp dd echo ln ls mkdir mv pwd rm sed uname \
+                            df hostname"
+
 # Recipe-provided:
 #   QNX_IFS_NAME     -- basename of the image, also passed to mkifs -a
 #   QNX_IFS_TEMPLATE -- .build template containing the @...@ markers
@@ -524,12 +543,23 @@ python do_generate_buildfile() {
     # A recipe that stages nothing and starts nothing is almost certainly a
     # mistake -- a typo in QNX_IFS_INSTALL, or a recipe that never installed
     # into ${QNX_STAGE_DIR} -- and would otherwise produce a silently empty image.
+    #
+    # Except for the recipes that mean it. A BSP puts a tree of binaries where
+    # mkifs can find them and contributes no records at all, because an image
+    # wants a handful of them and names those itself -- see qnx-bsp.bbclass.
+    # Warning about those is telling the truth and being wrong about it, so they
+    # opt out with QNX_IFS_STAGE_ONLY and the check keeps its meaning for
+    # everything else.
     for pn in installed:
+        if os.path.isfile(os.path.join(dropin_dir, pn + '.stageonly')):
+            continue
         if not any(os.path.isfile(os.path.join(dropin_dir, pn + s))
                    for s in ('.files', '.startup')):
             bb.warn("%s: '%s' is in QNX_IFS_INSTALL but contributes nothing to the "
                     "image. Does it install into ${QNX_STAGE_DIR} and inherit "
-                    "qnx-sdp?" % (d.getVar('PN'), pn))
+                    "qnx-sdp? If it is a stage-only recipe whose files the "
+                    "template names by hand, set QNX_IFS_STAGE_ONLY = \"1\" in it."
+                    % (d.getVar('PN'), pn))
 
     # Include-resolved, not raw: a template is allowed to keep the generated
     # sections in a shared fragment, and checking the unresolved text would
@@ -556,6 +586,9 @@ python do_generate_buildfile() {
     if toybox_cmds:
         toybox = d.getVar('QNX_IFS_TOYBOX')
         toybox_path = d.getVar('QNX_IFS_TOYBOX_PATH')
+        link_dir = (d.getVar('QNX_IFS_TOYBOX_LINK_DIR') or '/usr/bin').rstrip('/')
+        bin_cmds = set((d.getVar('QNX_IFS_TOYBOX_BIN_CMDS') or '').split())
+
         lines = ['', '### toybox (multicall: one binary, %d commands)'
                  % len(toybox_cmds),
                  '%s=%s' % (toybox_path, toybox)]
@@ -563,7 +596,12 @@ python do_generate_buildfile() {
         # symlink target without a leading slash resolves relative to the link's
         # own directory -- /bin/ls would look for /bin/toybox, which is not
         # where it lives.
-        lines += ['[type=link] /bin/%s=%s' % (cmd, toybox_path)
+        #
+        # QNX_IFS_TOYBOX_BIN_CMDS go to /bin, everything else to link_dir. A
+        # command named in BIN_CMDS but not in CMDS is simply not in the image;
+        # it is a subset selector, not a second list.
+        lines += ['[type=link] %s/%s=%s'
+                  % ('/bin' if cmd in bin_cmds else link_dir, cmd, toybox_path)
                   for cmd in toybox_cmds]
         files = files + '\n'.join(lines) + '\n'
 
@@ -597,7 +635,9 @@ python do_generate_buildfile() {
 addtask generate_buildfile after do_configure before do_mkifs
 do_generate_buildfile[vardeps] += "QNX_IFS_INSTALL QNX_IFS_STARTUP_DISABLE \
                                    QNX_IFS_AUTO_DEPS QNX_IFS_DEP_EXCLUDE \
-                                   QNX_IFS_LOADER QNX_IFS_SEARCH_SUBDIRS"
+                                   QNX_IFS_LOADER QNX_IFS_SEARCH_SUBDIRS \
+                                   QNX_IFS_TOYBOX_CMDS QNX_IFS_TOYBOX_PATH \
+                                   QNX_IFS_TOYBOX_LINK_DIR QNX_IFS_TOYBOX_BIN_CMDS"
 
 # Editing a shared fragment must rebuild the images that include it. The
 # template itself is already tracked (it comes through SRC_URI); the fragments
@@ -659,6 +699,13 @@ python do_dumpifs() {
 addtask dumpifs after do_mkifs
 do_dumpifs[nostamp] = "1"
 do_dumpifs[doc] = "Print the contents of the built IFS"
+
+# The generated build file, for `bitbake -c dumpbuild <image>` (qnx-sdp).
+# After generate_buildfile rather than mkifs: reading what was asked for should
+# not require the image to build, and when mkifs is what failed this is exactly
+# the file you want to look at.
+QNX_BUILDFILES = "${QNX_IFS_BUILDFILE}"
+addtask dumpbuild after do_generate_buildfile
 
 do_deploy() {
 	install -d ${DEPLOYDIR}

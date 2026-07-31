@@ -174,6 +174,15 @@ python do_generate_diskfiles() {
 }
 addtask generate_diskfiles after do_configure before do_compile
 
+# The generated build files, for `bitbake -c dumpbuild <image>` (qnx-sdp). Two
+# of them, and only the first exists this early: disk.cfg is written by
+# do_generate_diskcfg, which runs after the partitions are built because it
+# needs their real sizes. Ordering here rather than after that task keeps
+# dumpbuild cheap -- reading the boot partition's layout should not cost a
+# multi-gigabyte disk build. Run it again after a full build to see both.
+QNX_BUILDFILES = "${B}/boot.build ${B}/disk.cfg"
+addtask dumpbuild after do_generate_diskfiles
+
 python do_compile() {
     import os
     import shutil

@@ -108,6 +108,12 @@ do_generate_rootfs_buildfile[vardeps] += "QNX_ROOTFS_INSTALL QNX_ROOTFS_SIZE \
     QNX_ROOTFS_MIN QNX_ROOTFS_EXTRA QNX_ROOTFS_INODES QNX_ROOTFS_BLKSIZE"
 do_generate_rootfs_buildfile[file-checksums] += "${@qnx_template_include_checksums(d)}"
 
+# The generated build file, for `bitbake -c dumpbuild <image>` (qnx-sdp). This
+# is where QNX_ROOTFS_EXTRA contributions from other layers become visible --
+# the records are assembled at parse time and appear nowhere else.
+QNX_BUILDFILES = "${QNX_ROOTFS_BUILDFILE}"
+addtask dumpbuild after do_generate_rootfs_buildfile
+
 python do_compile() {
     import os
 

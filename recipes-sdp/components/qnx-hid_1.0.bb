@@ -17,3 +17,12 @@ QNX_COMPONENT_FILES = "\
     libinputevents.so \
     libkalman.so \
 "
+
+# /bin, where the reference host image has both, rather than the sbin the SDP
+# keeps them in.
+#
+# Note the reference carries io-hid at BOTH bin/io-hid and sbin/io-hid -- two
+# copies of one binary, from two hand-written entries in the same file. Only the
+# /bin one is reproduced here: matching a duplicate is not matching a location.
+QNX_COMPONENT_DEST[io-hid] = "/bin/io-hid"
+QNX_COMPONENT_DEST[hidview] = "/bin/hidview"

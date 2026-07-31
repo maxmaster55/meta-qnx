@@ -194,9 +194,13 @@ and any ssh session on them. During bring-up, ship the script and run it by hand
 Then check what you actually got, without hardware:
 
 ```bash
-bitbake -c dumpifs qnx-host-image
-less build-qnx/tmp/deploy/images/qnx-aarch64le/qnx-host.build
+bitbake -c dumpifs   qnx-host-image    # is the file in the image?
+bitbake -c dumpbuild qnx-host-image    # ...and if not, was it ever asked for?
 ```
+
+Run them in that order. A file missing from `dumpifs` but present in `dumpbuild` is
+an mkifs search-path problem; missing from both means the recipe never contributed
+it, and `QNX_IFS_INSTALL` or `QNX_IFS_EXTRA_ENTRIES` is where to look.
 
 ## Errors you will hit
 

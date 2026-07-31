@@ -803,6 +803,7 @@ at once.
 | `do_generate_buildfile` | `qnx-ifs` | expands the template into the real build file |
 | `do_mkifs` | `qnx-ifs` | runs mkifs |
 | `do_dumpifs` | `qnx-ifs` | prints the built image's contents (`bitbake -c dumpifs <image>`) |
+| `do_dumpbuild` | `qnx-sdp` | prints the generated build file (`bitbake -c dumpbuild <image>`); the files come from `QNX_BUILDFILES`, which `qnx-ifs`, `qnx-rootfs` and `qnx-disk` each set |
 | `do_deploy` | `qnx-ifs` | copies `.ifs`, generated `.build` and `.sym` files to the deploy dir |
 | `do_generate_diskfiles` | `qnx-disk` | expands the boot partition template, auto-sizing from contents |
 | `do_generate_diskcfg` | `qnx-disk` | sizes the disk from the partition images actually built |
@@ -819,6 +820,7 @@ Useful invocations:
 
 ```bash
 bitbake -c dumpifs qnx-ifs-hello              # build if needed, print the contents
+bitbake -c dumpbuild qnx-ifs-hello            # print the generated build file
 bitbake -c generate_buildfile qnx-ifs-hello   # generate without running mkifs
 bitbake -e qnx-hello | grep '^CC='            # what a recipe will actually run
 bitbake -g qnx-hello && cat pn-buildlist      # what it drags in

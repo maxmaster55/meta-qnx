@@ -14,17 +14,26 @@ inherit qnx-sdp-component
 # qnx-ifs.bbclass nor anything else can discover them -- leaving one out is
 # silent until the board prints `Unable to start "pipe" (2)`, errno 2, ENOENT.
 #
-# The loader is the other half: PT_INTERP asks for /usr/lib/ldqnx-64.so.2, which
-# the preamble's procmgr_symlink redirects to /proc/boot, so it is placed there
-# (see QNX_COMPONENT_DEST below). Without it every dynamically linked binary --
-# which is all of them but procnto -- fails with ELIBACC, errno 83.
+# The loader is NOT listed, and that is a fix rather than an omission. It used to
+# be, with QNX_COMPONENT_DEST[ldqnx-64.so.2] = "/ldqnx-64.so.2" -- a leading
+# slash, so it landed at the image root. Meanwhile the DT_NEEDED closure in
+# qnx-ifs.bbclass places the loader itself, with a bare destination, which is
+# /proc/boot. The two never collided because they were different paths, so mkifs
+# said nothing and every image carried the loader twice, ~250KB each:
 #
-# libc and the rest of the shared libraries are deliberately NOT listed: they
-# are reachable from DT_NEEDED and qnx-ifs.bbclass works the closure out for
+#     ldqnx-64.so.2              <- this component, at the image root
+#     proc/boot/ldqnx-64.so.2    <- the closure, where it belongs
+#
+# The reference image has only the second. The closure is the better owner: it
+# runs only when the image actually contains dynamic binaries, it resolves the
+# name across every search root, and it warns by name if the loader is missing --
+# "nothing will run" is worth saying out loud. See QNX_IFS_LOADER.
+#
+# libc and the rest of the shared libraries are deliberately NOT listed either:
+# they are reachable from DT_NEEDED and qnx-ifs.bbclass works the closure out for
 # itself. Listing them here would duplicate a list that is already derived, and
 # derived lists do not go stale.
 QNX_COMPONENT_FILES = "\
-    ldqnx-64.so.2 \
     pipe \
     slogger2 \
     dumper \
@@ -37,9 +46,6 @@ QNX_COMPONENT_FILES = "\
     slay \
     mount \
 "
-
-# The loader lands at /proc/boot rather than the /usr/lib the SDP keeps it in.
-QNX_COMPONENT_DEST[ldqnx-64.so.2] = "/ldqnx-64.so.2"
 
 # The config file libqcrypto reads to choose a provider. It is not an SDP file,
 # so it is written inline rather than named above -- and it has to exist, or

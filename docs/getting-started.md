@@ -35,6 +35,17 @@ TEMPLATECONF=$PWD/meta-qnx/conf/templates/default source poky/oe-init-build-env 
 > against poky rather than against the current directory, so the short form fails with
 > `Error: TEMPLATECONF value points to nonexistent directory`.
 
+> The template is copied, not linked. `oe-setup-builddir` writes `local.conf.sample`,
+> `bblayers.conf.sample` and `conf-notes.txt` into `<builddir>/conf/` **only when they are
+> not already there**, and the banner you see on every `source` is the build directory's
+> copy. So editing the template changes new build directories and leaves existing ones
+> exactly as they were — if a change to the template should show up in a build directory
+> you already have, copy it across yourself:
+>
+> ```bash
+> cp meta-qnx/conf/templates/default/conf-notes.txt build-qnx/conf/
+> ```
+
 Or by hand, in an existing build directory:
 
 ```bash
@@ -148,6 +159,17 @@ The quick way — bitbake finds `dumpifs` and the image itself:
 ```bash
 bitbake -c dumpifs qnx-ifs-hello
 ```
+
+And to read the generated build file — the one named in the table above — without
+hunting for the deploy directory:
+
+```bash
+bitbake -c dumpbuild qnx-ifs-hello
+```
+
+The pair is worth learning together: `dumpifs` shows what ended up in the image,
+`dumpbuild` shows what was asked for. `dumpbuild` does not build the image first,
+so it still works when mkifs is what failed.
 
 Or by hand:
 

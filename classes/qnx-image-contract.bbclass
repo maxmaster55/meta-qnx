@@ -49,6 +49,17 @@ QNX_IFS_DROPIN_DIR ?= "${QNX_STAGE_DIR}/ifs.d"
 # Set to "0" in a recipe that wants to spell out its entries by hand.
 QNX_IFS_AUTO_ENTRIES ?= "1"
 
+# Set in a recipe that stages files for an image's template to name by hand, and
+# deliberately contributes no records of its own. A BSP is the case: it unpacks a
+# tree of board binaries into the stage tree where mkifs can find them, and each
+# image names the few it wants.
+#
+# It exists only to keep the "contributes nothing to the image" check honest.
+# That check catches a real and common mistake -- a typo in QNX_IFS_INSTALL, a
+# recipe that installed outside ${QNX_STAGE_DIR} -- and a warning that also fires
+# on recipes doing the right thing is a warning people learn to scroll past.
+QNX_IFS_STAGE_ONLY ?= "0"
+
 # Command(s) to run from the image's startup script, e.g. "my-daemon &".
 QNX_IFS_STARTUP_CMD ?= ""
 
@@ -469,6 +480,19 @@ python qnx_image_write_dropins() {
 
     dropin_dir = destdir + d.getVar('QNX_IFS_DROPIN_DIR')
 
+    # A recipe that stages files for a template to name, and contributes no
+    # records of its own, says so here. An image cannot read another recipe's
+    # variables -- the same reason .startup carries its dependency list in a
+    # header -- so this travels as a file like everything else.
+    #
+    # Without it, "contributes nothing to the image" fires on every BSP: true as
+    # stated, and wrong as advice, since naming those binaries is the image's
+    # job by design.
+    if oe.types.boolean(d.getVar('QNX_IFS_STAGE_ONLY') or '0'):
+        bb.utils.mkdirhier(dropin_dir)
+        with open(os.path.join(dropin_dir, pn + '.stageonly'), 'w') as f:
+            f.write('### %s stages files for an image to name; no records\n' % pn)
+
     if entries or extra:
         bb.utils.mkdirhier(dropin_dir)
         with open(os.path.join(dropin_dir, pn + '.files'), 'w') as f:
@@ -503,7 +527,8 @@ python qnx_image_write_dropins() {
 
 # Without these, editing any of the drop-in inputs would not invalidate
 # do_install, and the change would silently not reach the image.
-qnx_image_write_dropins[vardeps] += "QNX_IFS_AUTO_ENTRIES QNX_IFS_STARTUP_CMD \
+qnx_image_write_dropins[vardeps] += "QNX_IFS_AUTO_ENTRIES QNX_IFS_STAGE_ONLY \
+                                     QNX_IFS_STARTUP_CMD \
                                      QNX_IFS_EXTRA_ENTRIES QNX_IFS_SEARCHABLE_DIRS \
                                      QNX_IFS_STARTUP_AFTER QNX_IFS_STARTUP_WAITFOR \
                                      QNX_IFS_STARTUP_WAITFOR_TIMEOUT \
