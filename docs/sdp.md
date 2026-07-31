@@ -292,6 +292,65 @@ Installs the selected packages. **Never a dependency of anything**, deliberately
 Run `-c resolve_sdp` first to see what it would do. Afterwards, run
 `-c write_lockfile` to record the result.
 
+## Changing a major component: install into a fresh SDP
+
+Moving a component onto a different release train — the hypervisor is the case
+that prompted this — is not an upgrade of one package. Components are qualified
+against a specific SDP baseline, and the one you want may be *older* than what
+you have. Hypervisor 8.0.4 Update 1, released June 2026, requires
+`microkernel.core [2.4.0.0,2.4.1)` from February 2026, while a current SDP is on
+2.6.0.
+
+Two ways to get this wrong, both of which cost real time:
+
+**Naming one package.** `-installIU <group>/<version>` on its own uninstalls the
+old group and takes its dependency closure with it — everything that existed only
+to satisfy it. An SDP went from 260 packages and 7.4 GB to 59 and 1.15 GB this
+way, losing `qcc`, `mkifs` and `dumpifs`. Recovery is `-c install_sdp` against
+the previous lockfile, about ten minutes, but nothing warns you first.
+
+**Reconstructing the baseline by hand.** Pinning packages one at a time to
+satisfy each error in turn does not converge: the microkernel pin exposes
+`libforksafe_mutex`, which exposes `libcontainer`, which exposes `io-sock`, and
+so on. You are re-deriving a set that already exists.
+
+What works is to let p2 solve it, in a directory with nothing in it to preserve:
+
+```bash
+qnxsoftwarecenter_clt -url https://www.qnx.com/swcenter \
+  -destination /path/to/new-sdp \
+  -installIU com.qnx.qnx800.target.hypervisor.group/<version> \
+  -setExperimentalEnabled=true -setPolicy=liberal @~/.qnx/qsc-credentials
+```
+
+That pulls the component's own qualified baseline — kernel, libc, `io-sock` and
+the host toolchain, ~231 packages. Then add what this project needs on top, as
+**ids without versions**, so the solver picks versions consistent with what is
+already there:
+
+```bash
+# what the lockfile wants that the new baseline does not have
+comm -13 <(... -listInstalled -destination /path/to/new-sdp | sed 's|/.*||' | sort -u) \
+         <(grep '^com.qnx' lockfile | sed 's|/.*||' | sort -u)
+```
+
+Anything in that list which genuinely cannot coexist gets dropped rather than
+forced. `microkernel.libcontainer` and `os_services.kpipe` both require APIs the
+2.4.0 kernel does not provide, and neither appears in any recipe or image here —
+check before removing, with `grep` over the layers and over a built `.build` file.
+
+Then point `QNX_SDP_ROOT` at the new tree and run `-c write_lockfile`. The old
+SDP is untouched throughout, which is the point: reverting is one line in
+`local.conf`.
+
+> `-setPolicy` takes `liberal`, `conservative` or `ultraconservative`. The
+> default is conservative, which will not move a package that is already
+> installed — so an upgrade appears to succeed while changing nothing.
+
+> Valid credentials matter more than they look. A wrong password produces
+> `HttpUnauthorizedException: Authentication failed` on *downloads* while the
+> catalog query still works, which reads as a licensing problem and is not one.
+
 ## A recipe can state what it needs
 
 ```bitbake
