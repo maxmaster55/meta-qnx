@@ -432,6 +432,32 @@ Available in templates as `@QNX_STARTUP@` and so on. Defaults describe a hypervi
 These are **image** properties, not machine properties: one aarch64le tree legitimately
 produces both a host and its guests.
 
+### System-wide environment
+
+`QNX_IFS_ENV` is environment every process on the image gets, written as space-separated
+`NAME=value` pairs. A value may not contain whitespace — the list is split on it.
+
+```bitbake
+QNX_IFS_ENV += "QT_QPA_PLATFORM=qnx"
+QNX_IFS_ENV += "QT_QPA_FONTDIR=/usr/lib/fonts"
+```
+
+It is written to **two** places, and it needs both:
+
+| Where | Reached by |
+| --- | --- |
+| the startup script (`@QNX_IFS_ENV_SCRIPT@`) | everything the boot script launches, and the login shell it ends with |
+| `/etc/profile` (`@QNX_IFS_ENV_PROFILE@`) | every interactive shell started later — a second console, ssh |
+
+Setting only one of the two produces the confusing case where a program works from the
+boot script and not from the prompt, or the reverse. Both markers live in shared fragments
+(`qnx-startup-preamble.build.inc`, `qnx-base.build.inc`), so an image gets this without
+touching its template, and an image that sets nothing is unaffected.
+
+This is for **system** properties: which QPA platform the board has, where its fonts are,
+whether there is a GPU. Application-private settings belong in the application's own
+launcher, where they override these — see [qt6.md](qt6.md).
+
 ### toybox
 
 QNX 8 ships no standalone `ls`, `cat`, `cp`, `uname` or `grep`. They come from `toybox`, a

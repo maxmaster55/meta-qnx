@@ -29,6 +29,12 @@
     SYSNAME=nto
     TERM=qansi
 
+    ## QNX_IFS_ENV -- the image's own system-wide environment, if it sets any.
+    ## Assignments here are inherited by everything the boot script starts and
+    ## by the login shell it ends with. /etc/profile in qnx-base.build.inc
+    ## carries the same list for shells started later.
+@QNX_IFS_ENV_SCRIPT@
+
     procmgr_symlink ../../proc/boot/ldqnx-64.so.2 /usr/lib/ldqnx-64.so.2
 
     pipe

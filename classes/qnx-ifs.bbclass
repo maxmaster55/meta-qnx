@@ -85,6 +85,41 @@ QNX_IFS_LD_LIBRARY_PATH ?= "/proc/boot:/lib:/usr/lib:/lib/dll"
 QNX_CONSOLE_DEV ?= "/dev/vcon1"
 
 # ---------------------------------------------------------------------------
+# System-wide environment
+# ---------------------------------------------------------------------------
+# Environment every process on the image gets, written as space-separated
+# NAME=value pairs:
+#
+#     QNX_IFS_ENV += "QT_QPA_PLATFORM=qnx QT_QPA_FONTDIR=/usr/lib/fonts"
+#
+# It reaches processes two ways, and it needs both:
+#
+#   the startup script   -- assignments there become the environment procnto
+#                           hands to everything the boot script launches, and
+#                           to the login shell it ends with. This is what makes
+#                           an application started at boot see them.
+#   /etc/profile         -- ksh sources it for every interactive shell (ENV is
+#                           set in the startup preamble). This is what makes a
+#                           shell you open later -- a second console, or ssh --
+#                           see the same thing.
+#
+# Setting only one of the two produces the confusing case where a program works
+# from the boot script and not from the prompt, or the reverse.
+#
+# A value may not contain whitespace: the list is split on it, and the startup
+# script has no quoting worth relying on. That is not a real limit for what
+# belongs here -- paths, platform names, feature switches.
+#
+# This is for *system* properties: which QPA platform this board has, where its
+# fonts live, whether there is a GPU. Application-private settings belong in the
+# application's own launcher, where they override these. In particular an
+# application that ships its own Qt must set its own QT_PLUGIN_PATH and library
+# path, which is why neither is set here: a global QT_PLUGIN_PATH would send
+# every self-contained application at one system-wide plugin directory and load
+# a platform plugin built against a different Qt.
+QNX_IFS_ENV ?= ""
+
+# ---------------------------------------------------------------------------
 # toybox
 # ---------------------------------------------------------------------------
 # QNX 8 ships no standalone ls, cat, cp, uname or grep -- there is nothing at
@@ -605,9 +640,24 @@ python do_generate_buildfile() {
                   for cmd in toybox_cmds]
         files = files + '\n'.join(lines) + '\n'
 
+    # QNX_IFS_ENV, in the two spellings the two places want. Both markers are
+    # in shared fragments and both expand to nothing when the list is empty, so
+    # an image that sets no environment is unaffected.
+    env_pairs = []
+    for item in (d.getVar('QNX_IFS_ENV') or '').split():
+        if '=' not in item:
+            bb.fatal("%s: QNX_IFS_ENV entry '%s' is not NAME=value"
+                     % (d.getVar('PN'), item))
+        env_pairs.append(item)
+
+    env_script = '\n'.join('    %s' % pair for pair in env_pairs)
+    env_profile = '\n'.join('export %s' % pair for pair in env_pairs)
+
     content = qnx_expand_template(d, template, {
         'QNX_IFS_FILES': files,
         'QNX_IFS_STARTUP': startup,
+        'QNX_IFS_ENV_SCRIPT': env_script,
+        'QNX_IFS_ENV_PROFILE': env_profile,
     })
 
     # Appended to the finished text, not to the files section: the closure has
@@ -634,6 +684,7 @@ python do_generate_buildfile() {
 }
 addtask generate_buildfile after do_configure before do_mkifs
 do_generate_buildfile[vardeps] += "QNX_IFS_INSTALL QNX_IFS_STARTUP_DISABLE \
+                                   QNX_IFS_ENV \
                                    QNX_IFS_AUTO_DEPS QNX_IFS_DEP_EXCLUDE \
                                    QNX_IFS_LOADER QNX_IFS_SEARCH_SUBDIRS \
                                    QNX_IFS_TOYBOX_CMDS QNX_IFS_TOYBOX_PATH \

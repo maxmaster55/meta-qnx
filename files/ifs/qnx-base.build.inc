@@ -30,6 +30,11 @@
 ## The paths mirror QNX_IFS_PATH and QNX_IFS_LD_LIBRARY_PATH, which is why they
 ## are markers rather than literals: an image that changes one would otherwise
 ## have a profile disagreeing with its own boot line.
+##
+## QNX_IFS_ENV lands here for the same reason, and in the startup preamble as
+## well: the boot script's environment and an interactive shell's are two
+## different things, and a variable set in only one of them produces a program
+## that works from the boot script and not from the prompt, or the reverse.
 ################################################################################
 /etc/profile = {
 export HOME=/
@@ -37,6 +42,7 @@ export SYSNAME=nto
 export TERM=qansi
 export PATH=@QNX_IFS_PATH@
 export LD_LIBRARY_PATH=@QNX_IFS_LD_LIBRARY_PATH@
+@QNX_IFS_ENV_PROFILE@
 }
 
 # esh reads this on startup. Empty in the reference image and empty here -- but
