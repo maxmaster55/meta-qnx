@@ -32,6 +32,9 @@
 # failed!" -- it does not quietly fall back. Turning it off is also what the
 # hand-written qt6-qnx recipe does (-DINPUT_opengl=no). A board with a GPU
 # overrides this whole variable rather than editing here.
+# PNG is enabled below through EXTRA_OECMAKE rather than here, because
+# PACKAGECONFIG[png] means *system* libpng and there is no system libpng on
+# QNX. See the FEATURE_png block further down.
 QNX_QTBASE_PACKAGECONFIG ?= "gui no-opengl"
 PACKAGECONFIG:qnx-aarch64le = "${QNX_QTBASE_PACKAGECONFIG}"
 
@@ -45,6 +48,28 @@ PACKAGECONFIG:qnx-aarch64le = "${QNX_QTBASE_PACKAGECONFIG}"
 # -DFEATURE_libresolv=OFF is what the hand-written qt6-qnx recipe passes, and
 # is the reason it does.
 EXTRA_OECMAKE:append:qnx-aarch64le = " -DFEATURE_libresolv=OFF"
+
+# PNG decoding, from the copies Qt carries in src/3rdparty rather than from the
+# system. Without this QtGui has no PNG decoder at all -- it is compiled in, not
+# a plugin -- and an application fails where it draws, with a message that
+# sounds like a missing plugin and is not:
+#
+#     QML Image: Error decoding: qrc:/images/car.png: Unsupported image format
+#
+# PACKAGECONFIG[png] is the wrong lever: it sets FEATURE_system_png, and there
+# is no system libpng here. Adding it (and zlib, which libpng needs) makes cmake
+# hunt for target libraries that the SDP does not ship and the zlib recipe does
+# not stage for QNX, so it resolves them in recipe-sysroot-native instead and
+# the link fails on an architecture mismatch naming neither png nor Qt:
+#
+#     aarch64-unknown-nto-qnx8.0.0-ld: recipe-sysroot-native/usr/lib/libz.so:
+#       error adding symbols: file in wrong format
+#
+# system_zlib is turned off for the same reason: bundled libpng needs zlib, and
+# Qt's bundled copy is the only one that exists for this target.
+EXTRA_OECMAKE:append:qnx-aarch64le = " -DFEATURE_png=ON \
+                                       -DFEATURE_system_png=OFF \
+                                       -DFEATURE_system_zlib=OFF"
 
 # --- QNX-specific link fixups ----------------------------------------------
 # Not folded into qnx-toolchain.bbclass on purpose: these are Qt's problems, not

@@ -92,6 +92,50 @@ none of those, so this single line distinguishes "it built" from "it built the r
 thing" — which matters here because a wrong `CMAKE_SYSTEM_NAME` produces a clean,
 successful, useless build.
 
+## Running it: what the image has to say
+
+Qt that links is not Qt that starts. Four things are properties of the *guest* rather than
+of any application, so they are set once on the image with `QNX_IFS_ENV` (see
+[variables.md](variables.md)) instead of once per launcher:
+
+| Variable | Why | Symptom without it |
+| --- | --- | --- |
+| `QT_QPA_PLATFORM=qnx` | Qt's compiled-in default is the Linux one | `qt.qpa.plugin: Could not find the Qt platform plugin "xcb"` |
+| `QT_QPA_FONTDIR=/usr/lib/fonts` | where `font-dejavu` puts its `.ttf` | `QFontDatabase: Cannot find font directory /usr/lib/fonts.` and every glyph a box |
+| `QT_QUICK_BACKEND=software` | `no-opengl`, so the RHI path has no backend | |
+| `QQNX_PHYSICAL_SCREEN_SIZE=150,90` | Screen reports 0×0 with no EDID | nonsense DPI: text microscopic or enormous |
+
+`QT_QPA_FONTDIR` is belt and braces — `/usr/lib/fonts` is already Qt's compiled-in default
+(`LibrariesPath + "/fonts"`) — but it is the value the failure names, and stating it makes
+the image and the font recipe visibly agree.
+
+**Fonts.** Qt here is built without fontconfig (`libQt6Gui` links freetype and nothing
+else), so its font database is the basic one: **one flat directory**, no font server, no
+cache, no aliasing. Two consequences. A font in a subdirectory is not found — the database
+lists the directory and does not descend — so `font-dejavu` flattens the package's
+`usr/share/fonts/dejavu/` into `/usr/lib/fonts/`. And there is no fallback: an empty
+directory is a screen of boxes, not a different typeface.
+
+The fonts come from QNX's own OSS repository, channel `8.0.3/extra` — the 8.0.4 channels
+carry 108 packages and no fonts at all. Mixing channels across point releases is safe for
+this and nothing else: a `.ttf` has no ABI. `font-dejavu`, `font-liberation`,
+`font-cantarell`, `font-inter`, `font-hack` and the Noto CJK/emoji sets are all there.
+
+**What is *not* set image-wide**, deliberately: `QT_PLUGIN_PATH`, `QML2_IMPORT_PATH` and
+additions to `LD_LIBRARY_PATH`. Each Qt application on this guest ships its own Qt in a
+self-contained deploy tree, so those are per-application prefixes. A global
+`QT_PLUGIN_PATH` would aim every such application at one directory and load a platform
+plugin built against a different Qt.
+
+**PNG** is decoded by the copy of libpng in Qt's `src/3rdparty`, not by a system one —
+`PACKAGECONFIG[png]` means *system* libpng and there is none for QNX. See the
+`FEATURE_png` block in the `qtbase` bbappend; without it an application fails where it
+draws, with a message that sounds like a missing plugin and is not:
+
+```
+QML Image: Error decoding: qrc:/images/car.png: Unsupported image format
+```
+
 ## Known rough edges
 
 **The drop-in is enormous.** `qtbase.files` is ~488 entries and includes Wayland protocol
@@ -109,10 +153,19 @@ fail the configure. It deploys an empty `qml/` and the app cannot start. Those a
 `CACHE PATH` variables, so `qt-cluster` overrides `QT6_QML_DIR`/`QT6_PLUGIN_DIR`
 explicitly and asserts a non-empty `deploy/qml` in `do_install`.
 
-**Nothing has run.** Every claim above is about what links, not what works. "`libqqnx.so`
-links `libscreen`" is a long way from "a QML scene renders on the board". No Qt binary
-produced this way has been put in an image or executed on hardware, and the QNX Screen
-service has to be running and configured before one could be.
+**A stale deploy tree does not show up as a failure.** `qt-cluster`'s `deploy/` can be
+built against an older `qtbase` than the one now staged, and `qnx-guest-rootfs` can hold an
+older `qt-cluster` than the one now built — while every rebuild reports
+`Tasks Summary: … all succeeded` and ships the old library. This cost five rebuilds
+chasing a PNG fix that was already correct. When a change to Qt does not reach the board,
+check the shipped file rather than the build log:
+
+```bash
+strings <rootfs tree>/qt-cluster/lib/libQt6Gui.so.6 | grep -c png
+```
+
+and clear it with a standalone `bitbake -c cleansstate qnx-guest-rootfs` — chained after
+`&&` it has been observed to run no tasks at all.
 
 **OpenGL is off.** `no-opengl` means QtQuick falls back to its software rasteriser. That is
 enough to render, and it is not what a cluster UI wants. The old `qt6-qnx` recipe had the
