@@ -46,14 +46,49 @@ S = "${WORKDIR}"
 
 QNX_SSH_STAGE = "${QNX_STAGE_DIR}/ssh"
 
+# Where the generated host keys are kept, and how long to wait for that
+# directory to exist.
+#
+# It has to be on a writable filesystem that survives a reboot, or the board
+# gets a new identity every boot and ssh reports the host key as changed --
+# which is the same thing it says when someone is impersonating the board, so
+# it is worth not crying wolf. The image that carries a data partition creates
+# this on it: see qnx-host-data.build.in in meta-qnx-hyp.
+#
+# The wait exists because the boot script starts sshd long before the data
+# partition is mounted -- the SD driver has not been started at that point. It
+# costs nothing, since that start is backgrounded. An image with no data
+# partition (a guest, say) simply never sees the directory appear, takes the
+# ephemeral fallback and says so.
+QNX_SSH_KEYDIR ?= "/var/ssh"
+QNX_SSH_KEYDIR_WAIT ?= "60"
+
 do_install() {
 	install -d ${D}${QNX_SSH_STAGE}
 	install -m 0744 ${WORKDIR}/ssh-server.sh ${D}${QNX_SSH_STAGE}/ssh-server.sh
+
+	# The script is referenced by the IFS record below rather than being an
+	# inline block, so the template's @MARKER@ pass never sees it -- the
+	# substitution has to happen here instead.
+	sed -i \
+		-e 's|@QNX_SSH_KEYDIR@|${QNX_SSH_KEYDIR}|g' \
+		-e 's|@QNX_SSH_KEYDIR_WAIT@|${QNX_SSH_KEYDIR_WAIT}|g' \
+		${D}${QNX_SSH_STAGE}/ssh-server.sh
+
+	if grep -q '@QNX_SSH' ${D}${QNX_SSH_STAGE}/ssh-server.sh; then
+		bbfatal "ssh-server.sh still has unexpanded markers after substitution"
+	fi
 }
 
-# /etc/ssh is a link to /dev/shmem so the generated host keys land in RAM -- an
-# IFS is read-only, and ssh-keygen has to be able to write. sshd_config goes to
-# the same place for the same reason.
+do_install[vardeps] += "QNX_SSH_KEYDIR QNX_SSH_KEYDIR_WAIT"
+
+# /etc/ssh is a link to /dev/shmem because sshd_config has to be somewhere
+# writable and an IFS is read-only.
+#
+# The host keys are NOT here any more -- they are in QNX_SSH_KEYDIR above, on
+# the data partition, because keys in RAM are regenerated every boot. sshd is
+# told about them with -h rather than through this file, so where the keys live
+# and where the configuration lives stay independent.
 #
 # sshd also needs a privilege-separation directory to exist before it will
 # accept a connection at all: without /var/chroot/sshd the daemon starts and
