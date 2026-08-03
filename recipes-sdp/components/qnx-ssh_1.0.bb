@@ -7,7 +7,10 @@ LICENSE = "CLOSED"
 
 inherit qnx-sdp-component
 
-DEPENDS += "qnx-base-runtime qnx-io-sock"
+# qnx-login for pam_qnx.so and the /etc/pam.d directory: this sshd authenticates
+# through PAM, so without that component every password is rejected no matter
+# what /etc/shadow says.
+DEPENDS += "qnx-base-runtime qnx-io-sock qnx-login"
 
 QNX_COMPONENT_FILES = "\
     sshd \
@@ -97,10 +100,40 @@ do_install[vardeps] += "QNX_SSH_KEYDIR QNX_SSH_KEYDIR_WAIT"
 # PermitRootLogin is yes because launching a hypervisor guest needs root, and
 # the reference image made the same call. Not a default to keep on a device that
 # faces anything.
+#
+# /etc/pam.d/sshd is the one without which none of the rest matters. This sshd
+# links libpam.so.2, so every authentication goes through PAM, and PAM resolves
+# a service by looking for a file named after it. There is no pam.d/sshd
+# anywhere in the SDP -- it ships login, su and passwd and stops -- so sshd's
+# lookup finds nothing and every password is rejected:
+#
+#     root@192.168.2.2's password:
+#     Permission denied, please try again.
+#
+# which is indistinguishable from a wrong password, and survives setting
+# PermitRootLogin, resetting /etc/shadow, and everything else that looks like
+# the problem. The contents are the SDP's own pam.d/login verbatim: one
+# pam_qnx.so per management group, which is what authenticates against
+# /etc/shadow.
+#
+# It goes here rather than in qnx-login because it is sshd's file -- an image
+# with a console login and no ssh has no use for it. qnx-login is what creates
+# /etc/pam.d and supplies pam_qnx.so, so both components have to be installed
+# for this to do anything, which is why it is now a dependency.
 QNX_IFS_EXTRA_ENTRIES = "\
 [type=dir uid=0 gid=0 dperms=0755] /var/chroot\n\
 [type=dir uid=0 gid=15 dperms=0755] /var/chroot/sshd\n\
 [type=link] /etc/ssh = /dev/shmem\n\
+[uid=0 gid=0 perms=0644] /etc/pam.d/sshd = {\n# The PAM configuration file for the 'sshd' service\n\
+\n\
+auth requisite pam_qnx.so\n\
+\n\
+account requisite pam_qnx.so\n\
+\n\
+session requisite pam_qnx.so\n\
+\n\
+password requisite pam_qnx.so\n\
+}\n\
 /dev/shmem/sshd_config = {\n\
 PermitRootLogin yes\n\
 AuthorizedKeysFile      .ssh/authorized_keys\n\
