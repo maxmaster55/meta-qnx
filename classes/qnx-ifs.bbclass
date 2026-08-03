@@ -707,12 +707,18 @@ python do_generate_buildfile() {
 
     identity = (d.getVar('QNX_SSH_IDENTITY') or '').strip()
     if identity:
+        dest = (d.getVar('QNX_SSH_IDENTITY_DEST') or '/root/.ssh/id_ed25519').strip()
         if not os.path.isfile(identity):
             bb.fatal("%s: QNX_SSH_IDENTITY is '%s', which does not exist. It is a "
                      "path on the build host to a PRIVATE key, installed into the "
-                     "image as /root/.ssh/id_ed25519."
-                     % (d.getVar('PN'), identity))
-        key_records.append('[perms=0600 uid=0 gid=0] /root/.ssh/id_ed25519=%s' % identity)
+                     "image as %s." % (d.getVar('PN'), identity, dest))
+        key_records.append('[perms=0600 uid=0 gid=0] %s=%s' % (dest, identity))
+
+        # Extra paths the same key has to be reachable at. Links rather than
+        # copies: it is one key, and two files that can drift apart is exactly
+        # what this should not be.
+        for link in (d.getVar('QNX_SSH_IDENTITY_LINKS') or '').split():
+            key_records.append('[type=link] %s=%s' % (link, dest))
 
     if key_records:
         content = (content.rstrip('\n') + '\n\n'
@@ -731,6 +737,7 @@ addtask generate_buildfile after do_configure before do_mkifs
 do_generate_buildfile[vardeps] += "QNX_IFS_INSTALL QNX_IFS_STARTUP_DISABLE \
                                    QNX_IFS_ENV \
                                    QNX_SSH_AUTHORIZED_KEYS QNX_SSH_IDENTITY \
+                                   QNX_SSH_IDENTITY_DEST QNX_SSH_IDENTITY_LINKS \
                                    QNX_IFS_AUTO_DEPS QNX_IFS_DEP_EXCLUDE \
                                    QNX_IFS_LOADER QNX_IFS_SEARCH_SUBDIRS \
                                    QNX_IFS_TOYBOX_CMDS QNX_IFS_TOYBOX_PATH \

@@ -11,7 +11,8 @@ image filesystems (IFS) with `mkifs` — using bitbake as the build orchestrator
 [Cookbook](docs/cookbook.md) ·
 [Reusing normal Yocto layers](docs/reusing-layers.md) ·
 [Sharing between images](docs/sharing-between-images.md) ·
-[Managing the SDP](docs/sdp.md)
+[Managing the SDP](docs/sdp.md) ·
+[ssh keys](docs/ssh.md)
 
 Status: **working proof of concept.**
 

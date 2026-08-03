@@ -91,6 +91,21 @@ QNX_SSH_KEYDIR_WAIT ?= "60"
 QNX_SSH_AUTHORIZED_KEYS ?= ""
 QNX_SSH_IDENTITY ?= ""
 
+# Where the identity lands, and any other path the SAME key has to be reachable
+# at. The extra ones become links, not copies -- it is one key, and two files
+# that can drift apart is what this must not become.
+#
+# The host needs two, because hms asks for it by two different names:
+#
+#     ssh_key=/root/.ssh/id_ed25519      to reach the guests
+#     ota_server_key=/.ssh/id_ed25519    to reach the OTA server
+#
+# and /.ssh is ~/.ssh there: qnx-base.build.inc sets HOME=/ in /etc/profile,
+# even though /etc/passwd gives root /root. Whichever of the two hms happens to
+# use, the key is at the end of it.
+QNX_SSH_IDENTITY_DEST ?= "/root/.ssh/id_ed25519"
+QNX_SSH_IDENTITY_LINKS ?= ""
+
 do_install() {
 	install -d ${D}${QNX_SSH_STAGE}
 	install -m 0744 ${WORKDIR}/ssh-server.sh ${D}${QNX_SSH_STAGE}/ssh-server.sh
