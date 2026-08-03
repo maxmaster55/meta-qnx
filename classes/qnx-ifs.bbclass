@@ -685,7 +685,23 @@ python do_generate_buildfile() {
 
     authorized = (d.getVar('QNX_SSH_AUTHORIZED_KEYS') or '').strip()
     if authorized:
-        lines = [k.strip() for k in authorized.splitlines() if k.strip()]
+        # Split on key TYPE tokens, not on newlines. bitbake's += joins with a
+        # space, so two keys appended separately arrive as one line -- and
+        # authorized_keys is one key per line, so writing that out gives a file
+        # sshd reads as a single malformed entry and honours neither key.
+        #
+        # A public key is "<type> <base64> [comment]", and a comment may contain
+        # spaces, so the only reliable boundary is the next type token.
+        types = ('ssh-', 'ecdsa-', 'sk-ssh-', 'sk-ecdsa-')
+        lines, current = [], []
+        for token in authorized.split():
+            if token.startswith(types) and current:
+                lines.append(' '.join(current))
+                current = []
+            current.append(token)
+        if current:
+            lines.append(' '.join(current))
+
         key_records.append('[perms=0600 uid=0 gid=0] /root/.ssh/authorized_keys = {\n'
                            + '\n'.join(lines) + '\n}')
 
