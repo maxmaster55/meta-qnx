@@ -101,25 +101,39 @@ do_install[vardeps] += "QNX_SSH_KEYDIR QNX_SSH_KEYDIR_WAIT"
 # the reference image made the same call. Not a default to keep on a device that
 # faces anything.
 #
-# /etc/pam.d/sshd is the one without which none of the rest matters. This sshd
-# links libpam.so.2, so every authentication goes through PAM, and PAM resolves
-# a service by looking for a file named after it. There is no pam.d/sshd
-# anywhere in the SDP -- it ships login, su and passwd and stops -- so sshd's
-# lookup finds nothing and every password is rejected:
+# UsePAM yes and /etc/pam.d/sshd are what make a password work at all here, and
+# neither is optional. Without them every login is refused, with the correct
+# password, in a way that is indistinguishable from a wrong one:
 #
 #     root@192.168.2.2's password:
 #     Permission denied, please try again.
 #
-# which is indistinguishable from a wrong password, and survives setting
-# PermitRootLogin, resetting /etc/shadow, and everything else that looks like
-# the problem. The contents are the SDP's own pam.d/login verbatim: one
-# pam_qnx.so per management group, which is what authenticates against
-# /etc/shadow.
+# The reason is the hash format. QNX writes /etc/shadow entries as
 #
-# It goes here rather than in qnx-login because it is sshd's file -- an image
-# with a console login and no ssh has no use for it. qnx-login is what creates
-# /etc/pam.d and supplies pam_qnx.so, so both components have to be installed
-# for this to do anything, which is why it is now a dependency.
+#     root:@S@<base64 hash>@<base64 salt>:...
+#
+# and @S@ is QNX's own format, not a crypt(3) one. Exactly one thing in the SDP
+# can verify it -- pam_qnx.so. sshd cannot, and neither can libc:
+#
+#     $ strings pam_qnx.so.2 | grep -c @S@    ->  1
+#     $ strings sshd         | grep -c @S@    ->  0
+#     $ strings libc.so.6    | grep -c @S@    ->  0
+#
+# OpenSSH defaults to UsePAM no (the SDP's own stock sshd_config has it
+# commented out at that value), so out of the box sshd checks the password with
+# crypt(), crypt() cannot parse @S@, and the comparison fails for every password
+# anyone could type. Turning PAM on routes the check through pam_qnx.so, which
+# is the only thing that understands what is in the file.
+#
+# This is why the reference image cannot have had working root ssh either: it
+# ships neither the pam.d/sshd file nor UsePAM. Its README documenting
+# root/root is describing the console.
+#
+# The pam.d/sshd contents are the SDP's own pam.d/login verbatim: one pam_qnx.so
+# per management group. It goes in this component rather than qnx-login because
+# it is sshd's file -- an image with a console login and no ssh has no use for
+# it. qnx-login is what creates /etc/pam.d and supplies pam_qnx.so, so both have
+# to be installed for either to be any use, which is why it is now a DEPENDS.
 QNX_IFS_EXTRA_ENTRIES = "\
 [type=dir uid=0 gid=0 dperms=0755] /var/chroot\n\
 [type=dir uid=0 gid=15 dperms=0755] /var/chroot/sshd\n\
@@ -136,6 +150,9 @@ password requisite pam_qnx.so\n\
 }\n\
 /dev/shmem/sshd_config = {\n\
 PermitRootLogin yes\n\
+UsePAM yes\n\
+PasswordAuthentication yes\n\
+KbdInteractiveAuthentication yes\n\
 AuthorizedKeysFile      .ssh/authorized_keys\n\
 Subsystem       sftp    /usr/libexec/sftp-server\n\
 }\n\
