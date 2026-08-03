@@ -674,6 +674,35 @@ python do_generate_buildfile() {
                     % (d.getVar('PN'),
                        sum(1 for record in records if '=' in record)))
 
+    # User ssh keys, from the IMAGE rather than from a component.
+    #
+    # Appended here for the same reason the closure above is: these are the
+    # image's own records, and a component cannot write them. qnx-ssh is one
+    # recipe shared by every image, so a value set in an image recipe never
+    # reaches its datastore -- the guest authorising a key would have silently
+    # produced nothing, which is exactly what it did until this moved.
+    key_records = []
+
+    authorized = (d.getVar('QNX_SSH_AUTHORIZED_KEYS') or '').strip()
+    if authorized:
+        lines = [k.strip() for k in authorized.splitlines() if k.strip()]
+        key_records.append('[perms=0600 uid=0 gid=0] /root/.ssh/authorized_keys = {\n'
+                           + '\n'.join(lines) + '\n}')
+
+    identity = (d.getVar('QNX_SSH_IDENTITY') or '').strip()
+    if identity:
+        if not os.path.isfile(identity):
+            bb.fatal("%s: QNX_SSH_IDENTITY is '%s', which does not exist. It is a "
+                     "path on the build host to a PRIVATE key, installed into the "
+                     "image as /root/.ssh/id_ed25519."
+                     % (d.getVar('PN'), identity))
+        key_records.append('[perms=0600 uid=0 gid=0] /root/.ssh/id_ed25519=%s' % identity)
+
+    if key_records:
+        content = (content.rstrip('\n') + '\n\n'
+                   + '### ssh keys (QNX_SSH_AUTHORIZED_KEYS / QNX_SSH_IDENTITY)\n'
+                   + '\n'.join(key_records) + '\n')
+
     buildfile = d.getVar('QNX_IFS_BUILDFILE')
     bb.utils.mkdirhier(os.path.dirname(buildfile))
     with open(buildfile, 'w') as f:
@@ -685,6 +714,7 @@ python do_generate_buildfile() {
 addtask generate_buildfile after do_configure before do_mkifs
 do_generate_buildfile[vardeps] += "QNX_IFS_INSTALL QNX_IFS_STARTUP_DISABLE \
                                    QNX_IFS_ENV \
+                                   QNX_SSH_AUTHORIZED_KEYS QNX_SSH_IDENTITY \
                                    QNX_IFS_AUTO_DEPS QNX_IFS_DEP_EXCLUDE \
                                    QNX_IFS_LOADER QNX_IFS_SEARCH_SUBDIRS \
                                    QNX_IFS_TOYBOX_CMDS QNX_IFS_TOYBOX_PATH \
@@ -774,3 +804,8 @@ do_deploy() {
 	done
 }
 addtask deploy after do_mkifs before do_build
+
+# The identity is a file outside the layer, so nothing else makes its contents
+# part of the signature -- replacing the key would otherwise leave the image
+# untouched.
+do_generate_buildfile[file-checksums] += "${@('%s:True' % d.getVar('QNX_SSH_IDENTITY')) if (d.getVar('QNX_SSH_IDENTITY') or '').strip() else ''}"

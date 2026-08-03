@@ -66,6 +66,31 @@ QNX_SSH_STAGE = "${QNX_STAGE_DIR}/ssh"
 QNX_SSH_KEYDIR ?= "/var/ssh"
 QNX_SSH_KEYDIR_WAIT ?= "60"
 
+# ---------------------------------------------------------------------------
+# Key-based login, in both directions
+# ---------------------------------------------------------------------------
+# These are about USER keys, not the host keys above -- who may log in without
+# a password, and what identity this machine presents when it logs in elsewhere.
+# Both are empty by default: an image says what it wants.
+#
+#   QNX_SSH_AUTHORIZED_KEYS   public key lines, one per key, that may log in as
+#                             root. Written to /root/.ssh/authorized_keys. A
+#                             public key is not a secret, so these are literals
+#                             an image or a layer can state outright.
+#
+#   QNX_SSH_IDENTITY          path on the BUILD HOST to a private key, installed
+#                             as /root/.ssh/id_ed25519 at 0600. This one is a
+#                             secret, which is why it is a path rather than a
+#                             literal and why nothing in this tree sets it: it
+#                             belongs in local.conf, beside QNX_SDP_ROOT, and
+#                             the key file stays outside the layer.
+#
+# hms is what needs both halves. It ssh's from the host into each guest to
+# manage it, so the host carries the private key and every guest authorises the
+# matching public one -- see meta-qnx-hyp's conf/hms-ssh-key.inc.
+QNX_SSH_AUTHORIZED_KEYS ?= ""
+QNX_SSH_IDENTITY ?= ""
+
 do_install() {
 	install -d ${D}${QNX_SSH_STAGE}
 	install -m 0744 ${WORKDIR}/ssh-server.sh ${D}${QNX_SSH_STAGE}/ssh-server.sh
@@ -158,3 +183,8 @@ Subsystem       sftp    /usr/libexec/sftp-server\n\
 }\n\
 [perms=0744] /proc/boot/.ssh-server.sh=@QNX_IFS_SYSROOT@${QNX_SSH_STAGE}/ssh-server.sh\
 "
+
+# QNX_SSH_AUTHORIZED_KEYS and QNX_SSH_IDENTITY are documented above but acted on
+# in qnx-ifs.bbclass, not here. They are per-IMAGE: this component is one recipe
+# shared by every image, so a value an image sets never reaches this datastore --
+# writing the records here produced nothing at all, silently.
