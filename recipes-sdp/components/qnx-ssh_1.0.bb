@@ -184,6 +184,20 @@ do_install[vardeps] += "QNX_SSH_KEYDIR QNX_SSH_KEYDIR_WAIT"
 # it is sshd's file -- an image with a console login and no ssh has no use for
 # it. qnx-login is what creates /etc/pam.d and supplies pam_qnx.so, so both have
 # to be installed for either to be any use, which is why it is now a DEPENDS.
+# ssh_config is for ssh going OUT from this machine. /root/.ssh is in the
+# read-only IFS, so the client cannot record a host key there and every outbound
+# connection ends with
+#
+#     Failed to add the host to the list of known hosts (/root/.ssh/known_hosts)
+#
+# It is pointed at QNX_SSH_KEYDIR on the data partition instead, where it
+# persists -- which is also what makes it possible to turn
+# StrictHostKeyChecking back on rather than passing =no everywhere, as hms
+# currently has to.
+#
+# ${...} rather than an @MARKER@: this is expanded by bitbake in THIS recipe's
+# context. The fragment expander resolves markers against the image's datastore,
+# where QNX_SSH_KEYDIR is not set.
 QNX_IFS_EXTRA_ENTRIES = "\
 [type=dir uid=0 gid=0 dperms=0755] /var/chroot\n\
 [type=dir uid=0 gid=15 dperms=0755] /var/chroot/sshd\n\
@@ -197,6 +211,9 @@ account requisite pam_qnx.so\n\
 session requisite pam_qnx.so\n\
 \n\
 password requisite pam_qnx.so\n\
+}\n\
+/dev/shmem/ssh_config = {\n\
+UserKnownHostsFile      ${QNX_SSH_KEYDIR}/known_hosts\n\
 }\n\
 /dev/shmem/sshd_config = {\n\
 PermitRootLogin yes\n\

@@ -5,8 +5,13 @@ different ways. This is what each one is and where it lives.
 
 ## 1. The board's own identity (host keys)
 
-Generated on the board, not shipped. A key baked into an image is the same key
-on every board written from it.
+The **host's** key is generated on the board, not shipped: a key baked into an
+image is the same key on every board written from it, so it would prove nothing
+about which board you reached.
+
+The **guests'** keys go the other way — generated at build time by the
+`ssh-hostkeys` recipe and shipped, so the host can pre-accept them. See
+[§4](#4-pre-accepted-guest-keys) for why the opposite answer is right there.
 
 `ssh-server.sh` makes them once and reuses them after, in **`QNX_SSH_KEYDIR`**
 (`/var/ssh`), which is on the data partition. They used to land in `/dev/shmem`,
@@ -129,14 +134,18 @@ produced nothing at all, silently.
 ### Setting it up
 
 The public key both guests authorise is in
-`meta-qnx-hyp/conf/hms-ssh-key.inc`. The private half is **not** in this tree,
-and is not in the hypervisor monorepo either — that build file reads it from a
-gitignored path, so only `hms_ssh_key.pub` is tracked there. Point at it:
+`meta-qnx-hyp/conf/hms-ssh-key.inc`. The private half is never in this tree —
+it is named by path:
 
 ```bitbake
 # build-qnx/conf/local.conf
 QNX_SSH_IDENTITY = "/path/to/hms_ssh_key"
 ```
+
+The pair in use was generated locally, into the gitignored build directory.
+The reference project's pair could not be reused: its private half exists only
+*inside* the images it ships, because the source path its build file reads is
+gitignored there, so the monorepo carries the `.pub` and nothing else.
 
 Unset, everything still builds and `hms` still starts — it simply cannot log into
 a guest, and reports that per connection rather than at build time.
@@ -170,3 +179,84 @@ string appears in exactly one file. Most likely a key made by hand so a person
 could log in without a password, which would explain why guest-1 has it and
 guest-2 does not. If it belongs to nobody, deleting it is better than keeping it
 out of caution.
+
+## 4. Pre-accepted guest keys
+
+Host-to-guest ssh used to be unverifiable, and `hms` papered over it with
+`StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null` — accept whatever
+answers, then throw away the evidence. That was not carelessness: the guests had
+no writable `/var/ssh`, so they minted a new identity on every boot and real
+checking was impossible.
+
+The `ssh-hostkeys` recipe in meta-qnx-hyp closes it. At build time it generates
+one ed25519 host key per guest and a matching `known_hosts`:
+
+```
+guest-1/ssh_host_ed25519_key      → guest rootfs, /var/ssh/
+known_hosts                       → host data partition, /var/ssh/known_hosts
+```
+
+`ssh-server.sh` only generates a key when it does not find one, so the guest
+keeps the shipped identity from its first boot — and the host already has it
+before the guest has ever run. No prompt, no TOFU window, and `hms` now uses
+`StrictHostKeyChecking=accept-new` rather than `no`.
+
+### Why baking keys in is right here and wrong for the host
+
+| | host key | guest keys |
+| --- | --- | --- |
+| reached by | a person, from a laptop, over the LAN | `hms` only, from the host it runs on |
+| over | a real network | a point-to-point virtual wire inside one board |
+| can anything else answer? | yes | no — `10.0.0.2` has no route off the board |
+| so | generate per board | generate per build |
+
+### guest-2 is different
+
+The Linux guest runs dropbear, whose host keys are in dropbear's own format, and
+converting an OpenSSH key needs `dropbearconvert` — which this build has no
+native recipe for. Putting it in `known_hosts` anyway would be worse than leaving
+it out: the host would hold a key the guest does not have, turning a first-
+connection prompt into a hard mismatch. It is pinned on first contact by
+`accept-new` instead.
+
+### Regenerating
+
+The keys are stable across rebuilds because `do_compile` is cached in sstate.
+
+```bash
+bitbake -c cleansstate ssh-hostkeys
+```
+
+mints new ones — after which **both images must be rebuilt together**, or the
+host's `known_hosts` names a key the guest no longer has and every connection
+fails closed.
+
+### Outbound known_hosts
+
+`/root/.ssh` is in the read-only IFS, so the ssh *client* could never record a
+host key there:
+
+```
+Failed to add the host to the list of known hosts (/root/.ssh/known_hosts)
+```
+
+Both images now ship an `ssh_config` pointing `UserKnownHostsFile` at
+`${QNX_SSH_KEYDIR}/known_hosts` on the data partition, which is the same file the
+pre-accepted guest keys live in and where runtime-learned entries accumulate.
+
+## 5. Things that were installed but never started
+
+Three faults found on hardware, all the same shape — the binary was in the image
+and nothing ran it, so the symptom pointed somewhere else entirely.
+
+| symptom | actual cause |
+| --- | --- |
+| `ssh root@10.0.0.2` → connection timed out | the guest's virtio-net vdevs were declared in the order that puts the host link on `vtnet1`, so `10.0.0.2` sat on the guest-to-guest wire |
+| `Connection refused` once ping worked | the guest installed `qnx-ssh` but never ran `.ssh-server.sh` |
+| `PTY allocation request failed on channel 0` | the guest had `devc-pty` and never started it, so sshd could authenticate but not allocate a terminal |
+
+The vdev one is worth remembering: the guest enumerates virtio-net vdevs in
+**reverse declaration order**, so the one declared *last* becomes `vtnet0`. The
+MMIO addresses are identical whichever way round they are written, so they look
+like they settle the question and do not. The MACs are what give it away — the
+`mac` line on `guest_to_host` appears on whichever interface it really is.
