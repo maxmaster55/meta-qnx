@@ -506,7 +506,21 @@ python do_generate_buildfile() {
                                  "is not set" % (d.getVar('PN'), pn, name))
                     return value
 
-                text = re.sub(r'@([A-Z][A-Z0-9_]*)@', expand_fragment, text)
+                # Two or more characters, NOT one. A single-letter marker is
+                # indistinguishable from QNX's own crypt format, which delimits
+                # the hash type the same way:
+                #
+                #     root:@S@<base64 hash>@<base64 salt>:...
+                #
+                # With [A-Z0-9_]* that @S@ matched, and every image this layer
+                # built got d.getVar('S') -- the recipe's source directory --
+                # substituted into root's password field. No password could ever
+                # be verified, and nothing said so: the file looked plausible,
+                # ssh just refused every login.
+                #
+                # Nothing legitimately needs a one-character marker, so the
+                # narrower pattern costs nothing.
+                text = re.sub(r'@([A-Z][A-Z0-9_]+)@', expand_fragment, text)
                 out.append((index, pn, text))
         return out
 
@@ -683,7 +697,18 @@ python do_generate_buildfile() {
     # produced nothing, which is exactly what it did until this moved.
     key_records = []
 
+    # Public keys can also be named by file, which is what you want for an
+    # operator's own key: it stays in ~/.ssh and never gets pasted into a
+    # git-tracked recipe. Contents are appended to whatever the variable holds.
     authorized = (d.getVar('QNX_SSH_AUTHORIZED_KEYS') or '').strip()
+    for path in (d.getVar('QNX_SSH_AUTHORIZED_KEYS_FILE') or '').split():
+        if not os.path.isfile(path):
+            bb.fatal("%s: QNX_SSH_AUTHORIZED_KEYS_FILE names '%s', which does not "
+                     "exist. It is a path on the build host to a PUBLIC key (.pub)."
+                     % (d.getVar('PN'), path))
+        with open(path) as f:
+            authorized = (authorized + ' ' + f.read().strip()).strip()
+
     if authorized:
         # Split on key TYPE tokens, not on newlines. bitbake's += joins with a
         # space, so two keys appended separately arrive as one line -- and
@@ -736,7 +761,8 @@ python do_generate_buildfile() {
 addtask generate_buildfile after do_configure before do_mkifs
 do_generate_buildfile[vardeps] += "QNX_IFS_INSTALL QNX_IFS_STARTUP_DISABLE \
                                    QNX_IFS_ENV \
-                                   QNX_SSH_AUTHORIZED_KEYS QNX_SSH_IDENTITY \
+                                   QNX_SSH_AUTHORIZED_KEYS QNX_SSH_AUTHORIZED_KEYS_FILE \
+                                   QNX_SSH_IDENTITY \
                                    QNX_SSH_IDENTITY_DEST QNX_SSH_IDENTITY_LINKS \
                                    QNX_IFS_AUTO_DEPS QNX_IFS_DEP_EXCLUDE \
                                    QNX_IFS_LOADER QNX_IFS_SEARCH_SUBDIRS \
@@ -832,3 +858,7 @@ addtask deploy after do_mkifs before do_build
 # part of the signature -- replacing the key would otherwise leave the image
 # untouched.
 do_generate_buildfile[file-checksums] += "${@('%s:True' % d.getVar('QNX_SSH_IDENTITY')) if (d.getVar('QNX_SSH_IDENTITY') or '').strip() else ''}"
+
+# Named .pub files are outside the layer, so their contents are not otherwise
+# part of the signature -- swapping a key would leave the image untouched.
+do_generate_buildfile[file-checksums] += "${@' '.join('%s:True' % p for p in (d.getVar('QNX_SSH_AUTHORIZED_KEYS_FILE') or '').split())}"

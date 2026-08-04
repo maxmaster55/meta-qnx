@@ -395,7 +395,11 @@ def qnx_expand_template(d, template, generated=None):
             bb.fatal("%s references @%s@, which is not set" % (template, name))
         return value
 
-    return re.sub(r'@([A-Z][A-Z0-9_]*)@', expand, content)
+    # Two or more characters, matching the fragment expander in qnx-ifs.bbclass
+    # and for the same reason: @S@ is QNX's crypt-format delimiter in
+    # /etc/shadow, not a marker, and expanding it corrupts every password hash
+    # in the image without producing a single warning.
+    return re.sub(r'@([A-Z][A-Z0-9_]+)@', expand, content)
 
 
 def qnx_parse_size(text, what='size'):

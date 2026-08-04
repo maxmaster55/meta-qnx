@@ -91,6 +91,16 @@ QNX_SSH_KEYDIR_WAIT ?= "60"
 QNX_SSH_AUTHORIZED_KEYS ?= ""
 QNX_SSH_IDENTITY ?= ""
 
+# Public keys named by file rather than written out. Contents are appended to
+# QNX_SSH_AUTHORIZED_KEYS, so the two can be used together -- a project key
+# stated in a layer, plus whoever is working on the board today:
+#
+#     QNX_SSH_AUTHORIZED_KEYS_FILE = "/home/you/.ssh/id_ed25519.pub"
+#
+# in local.conf, so an operator's own key stays in ~/.ssh and never lands in a
+# git-tracked recipe.
+QNX_SSH_AUTHORIZED_KEYS_FILE ?= ""
+
 # Where the identity lands, and any other path the SAME key has to be reachable
 # at. The extra ones become links, not copies -- it is one key, and two files
 # that can drift apart is what this must not become.
