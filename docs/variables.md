@@ -458,6 +458,75 @@ This is for **system** properties: which QPA platform the board has, where its f
 whether there is a GPU. Application-private settings belong in the application's own
 launcher, where they override these — see [qt6.md](qt6.md).
 
+> `ENV=/etc/profile` is set in the startup preamble, and that is what makes the
+> `/etc/profile` half work at all. Without it the file is written into the image and read
+> by nothing — which is what it was until recently, search paths and all.
+
+### The shell prompt
+
+`QNX_IFS_PROMPT` is what `PS1` is set to in `/etc/profile`:
+
+```bitbake
+QNX_IFS_PROMPT = "(G1)# "
+```
+
+Three shells on this board look identical — the hypervisor host's console, the QNX
+guest's, and an ssh session into either — and the stock prompt is a bare `# ` in all of
+them. Which one you are typing at is otherwise a matter of memory, and a command meant for
+a guest is not always harmless run on the host.
+
+| Image | Value |
+| --- | --- |
+| `qnx-host-image` | `(HOST)# ` |
+| `qnx-guest-image` | `(G1)# ` |
+| `bmo-image-ai` (Linux) | `(G2) \u@\h:\w\$ ` — set by `shell-prompt` in meta-bmo, this mechanism being QNX-only |
+
+Unlike `QNX_IFS_ENV` this is a single value, not a list: it is written quoted, so spaces
+and shell metacharacters are fine and the trailing space is preserved. A single quote in
+it fails the build rather than producing an unparseable profile. It is deliberately **not**
+written to the startup script — `PS1` there would be inherited by every daemon the boot
+script launches, and the login shell that script ends with is interactive and reads
+`/etc/profile` like any other. Empty leaves `PS1` alone.
+
+For an ssh session it takes one more thing: `sshd_config` carries `SetEnv ENV=/etc/profile`
+(in the `qnx-ssh` component), because sshd builds a clean environment for the session and
+will not pass its own `ENV` through.
+
+### Shell history
+
+`ksh` keeps no history unless told where, and offers no line editing unless told to —
+so on a stock image the up arrow prints an escape sequence and every command is retyped.
+Over a serial console that is most of the cost of using the board.
+
+| Variable | Default | |
+| --- | --- | --- |
+| `QNX_IFS_HISTFILE` | `/var/sh_history` | where history is kept; empty disables all of this |
+| `QNX_IFS_HISTFILE_FALLBACK` | `/dev/shmem/sh_history` | used when the first is not writable |
+| `QNX_IFS_HISTSIZE` | `500` | commands kept |
+
+Three things are needed and all three are missing by default:
+
+```sh
+set -o emacs                    # the line editor -- without it the arrow keys
+                                # are bound to nothing and HISTFILE changes nothing
+HISTSIZE=500
+if [ -w /var ]; then            # the path is chosen at shell startup, not baked in
+HISTFILE=/var/sh_history
+else
+HISTFILE=/dev/shmem/sh_history
+fi
+export HISTFILE HISTSIZE
+```
+
+`ksh`'s own default is `$HOME/.sh_history`, and `HOME` here is `/` or `/root` — both in
+the read-only IFS, so the default could never have worked. `/var` comes from the data
+partition on both images, so history survives a reboot; a board whose data partition did
+not mount still gets history for the session, in RAM, rather than ksh complaining about a
+file it cannot write.
+
+The Linux guest needs none of this — bash has history on by default and `/home/root` is
+writable.
+
 ### toybox
 
 QNX 8 ships no standalone `ls`, `cat`, `cp`, `uname` or `grep`. They come from `toybox`, a

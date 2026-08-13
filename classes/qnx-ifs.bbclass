@@ -120,6 +120,57 @@ QNX_CONSOLE_DEV ?= "/dev/vcon1"
 QNX_IFS_ENV ?= ""
 
 # ---------------------------------------------------------------------------
+# The shell prompt
+# ---------------------------------------------------------------------------
+# What PS1 is set to in /etc/profile:
+#
+#     QNX_IFS_PROMPT = "(G1) # "
+#
+# There are three shells on this board that all look identical -- the host
+# console, the QNX guest's console, and a session ssh'd into either -- and the
+# stock prompt is a bare "# " in all of them. Which one you are typing at is
+# then a matter of memory, and a command meant for a guest run on the host is
+# not always a harmless mistake.
+#
+# Unlike QNX_IFS_ENV this is one value rather than a list and is written to
+# /etc/profile only, quoted, so spaces and shell metacharacters in it are fine.
+# It is deliberately not in the startup script: PS1 there would be inherited by
+# every daemon the boot script launches, for no benefit -- and the login shell
+# the script ends with is interactive, so it reads /etc/profile like any other.
+#
+# Empty leaves PS1 alone, which is the stock "# ".
+QNX_IFS_PROMPT ?= ""
+
+# ---------------------------------------------------------------------------
+# Shell history
+# ---------------------------------------------------------------------------
+# ksh keeps no history at all unless it is told where to keep it, and offers no
+# line editing unless told to -- so on a stock image the up arrow prints an
+# escape sequence and every command is typed from scratch. On a board reached
+# over a serial console that is most of the cost of using it.
+#
+# Three things are needed and all three are missing by default:
+#
+#   HISTFILE   where to write it. ksh's own default is $HOME/.sh_history, and
+#              HOME here is either / or /root -- both in the read-only IFS, so
+#              the default can never work on this image.
+#   HISTSIZE   how much to keep.
+#   set -o emacs
+#              the line editor. Without it there is no history recall no matter
+#              what HISTFILE says: the arrow keys are not bound to anything.
+#
+# The path is chosen at shell startup rather than baked in, because it has to be
+# writable and only one of the candidates is. /var comes from the data partition
+# on both images, so history survives a reboot -- but a board whose data
+# partition did not mount still gets history for the session, in RAM, instead of
+# ksh complaining about a file it cannot write.
+#
+# Set QNX_IFS_HISTFILE = "" to leave history off entirely.
+QNX_IFS_HISTFILE ?= "/var/sh_history"
+QNX_IFS_HISTFILE_FALLBACK ?= "/dev/shmem/sh_history"
+QNX_IFS_HISTSIZE ?= "500"
+
+# ---------------------------------------------------------------------------
 # toybox
 # ---------------------------------------------------------------------------
 # QNX 8 ships no standalone ls, cat, cp, uname or grep -- there is nothing at
@@ -667,11 +718,47 @@ python do_generate_buildfile() {
     env_script = '\n'.join('    %s' % pair for pair in env_pairs)
     env_profile = '\n'.join('export %s' % pair for pair in env_pairs)
 
+    # QNX_IFS_PROMPT. Single-quoted so that whitespace survives and so that
+    # nothing in it is expanded when the profile is read rather than when the
+    # prompt is printed -- a value containing $ is a legitimate thing to want.
+    # A ' in the value would end the quoting early and is refused rather than
+    # written out to produce an unparseable profile.
+    # Not stripped: the trailing space in "(G1)# " is the whole point of it.
+    prompt = d.getVar('QNX_IFS_PROMPT') or ''
+    if "'" in prompt:
+        bb.fatal("%s: QNX_IFS_PROMPT may not contain a single quote: %s"
+                 % (d.getVar('PN'), prompt))
+    prompt_profile = "export PS1='%s'" % prompt if prompt.strip() else ''
+
+    # Shell history. A block rather than a marker per value: the path is picked
+    # at run time by testing what is writable, which needs real shell.
+    #
+    # No brace anywhere in it -- /etc/profile is an inline mkifs block, and one
+    # closing brace ends the block early and turns the rest of the file into
+    # file records. "if/fi" is safe; "${...}" and "$(...)" are not.
+    histfile = (d.getVar('QNX_IFS_HISTFILE') or '').strip()
+    if histfile:
+        histdir = histfile.rsplit('/', 1)[0] or '/'
+        history_profile = '\n'.join([
+            'set -o emacs',
+            'HISTSIZE=%s' % (d.getVar('QNX_IFS_HISTSIZE') or '500').strip(),
+            'if [ -w %s ]; then' % histdir,
+            'HISTFILE=%s' % histfile,
+            'else',
+            'HISTFILE=%s' % (d.getVar('QNX_IFS_HISTFILE_FALLBACK') or '').strip(),
+            'fi',
+            'export HISTFILE HISTSIZE',
+        ])
+    else:
+        history_profile = ''
+
     content = qnx_expand_template(d, template, {
         'QNX_IFS_FILES': files,
         'QNX_IFS_STARTUP': startup,
         'QNX_IFS_ENV_SCRIPT': env_script,
         'QNX_IFS_ENV_PROFILE': env_profile,
+        'QNX_IFS_PROMPT_PROFILE': prompt_profile,
+        'QNX_IFS_HISTORY_PROFILE': history_profile,
     })
 
     # Appended to the finished text, not to the files section: the closure has
@@ -760,7 +847,9 @@ python do_generate_buildfile() {
 }
 addtask generate_buildfile after do_configure before do_mkifs
 do_generate_buildfile[vardeps] += "QNX_IFS_INSTALL QNX_IFS_STARTUP_DISABLE \
-                                   QNX_IFS_ENV \
+                                   QNX_IFS_ENV QNX_IFS_PROMPT \
+                                   QNX_IFS_HISTFILE QNX_IFS_HISTFILE_FALLBACK \
+                                   QNX_IFS_HISTSIZE \
                                    QNX_SSH_AUTHORIZED_KEYS QNX_SSH_AUTHORIZED_KEYS_FILE \
                                    QNX_SSH_IDENTITY \
                                    QNX_SSH_IDENTITY_DEST QNX_SSH_IDENTITY_LINKS \

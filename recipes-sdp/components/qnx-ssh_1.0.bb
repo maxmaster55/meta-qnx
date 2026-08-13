@@ -220,6 +220,7 @@ PermitRootLogin yes\n\
 UsePAM yes\n\
 PasswordAuthentication yes\n\
 KbdInteractiveAuthentication yes\n\
+SetEnv ENV=/etc/profile\n\
 AuthorizedKeysFile      .ssh/authorized_keys\n\
 Subsystem       sftp    /usr/libexec/sftp-server\n\
 }\n\

@@ -29,6 +29,12 @@
     SYSNAME=nto
     TERM=qansi
 
+    ## ksh sources whatever ENV names, for every interactive shell. Without it
+    ## /etc/profile is written into the image and read by nothing -- which is
+    ## what it was, despite the comment in qnx-base.build.inc saying otherwise.
+    ## Everything in that file, the search paths included, was dead.
+    ENV=/etc/profile
+
     ## QNX_IFS_ENV -- the image's own system-wide environment, if it sets any.
     ## Assignments here are inherited by everything the boot script starts and
     ## by the login shell it ends with. /etc/profile in qnx-base.build.inc
