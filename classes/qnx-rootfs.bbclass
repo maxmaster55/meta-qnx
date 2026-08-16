@@ -70,6 +70,42 @@ QNX_ROOTFS_EXTRA ?= ""
 
 B = "${WORKDIR}/build"
 
+
+def qnx_rootfs_estimate(d, template, extra_raw=""):
+    """Bytes needed for everything a build file pulls in, plus a margin.
+
+    Reads the template (and QNX_ROOTFS_EXTRA, which carries records the
+    template never sees) and stats every "= /host/path" source it names. The
+    template still has @MARKER@s at this point, so paths containing one are
+    skipped -- they are expanded later and are small text files in practice.
+
+    The margin covers inodes, bitmaps and directory blocks: 15% plus 16 MiB,
+    which is generous at this scale and cheap when wrong, since being over
+    costs sparse zeros and being under costs a whole extra pass.
+    """
+    import os, re
+
+    text = ""
+    try:
+        with open(template) as f:
+            text = f.read()
+    except OSError:
+        return 0
+    text += "\n" + (extra_raw or "").replace("\\n", "\n")
+
+    total = 0
+    for m in re.finditer(r"=\s*(/[^\s]+)", text):
+        path = m.group(1)
+        if "@" in path:
+            continue
+        try:
+            # st_size, not st_blocks: mkqnx6fsimg writes the logical contents,
+            # so a sparse 2 GiB input still needs 2 GiB of filesystem.
+            total += os.stat(path).st_size
+        except OSError:
+            continue
+    return int(total * 1.15) + 16 * 1024 * 1024
+
 python do_generate_rootfs_buildfile() {
     import math
     import os
@@ -82,7 +118,30 @@ python do_generate_rootfs_buildfile() {
 
     requested = (d.getVar('QNX_ROOTFS_SIZE') or 'auto').strip()
     if requested == 'auto':
+        # Estimate from the contents rather than starting at the minimum.
+        #
+        # "auto" used to begin at QNX_ROOTFS_MIN and let qnx_build_fsimg grow
+        # it on failure. For the host data partition that meant mkqnx6fsimg
+        # was asked to fit 4.4 GiB into 64 MiB: it reads and processes every
+        # input file, discovers it does not fit, and the whole pass is thrown
+        # away before the real one starts.
+        #
+        #     NOTE: qnx-host-data.img did not fit in 131072 sectors;
+        #           retrying with 9028464
+        #
+        # 131072 sectors is 64 MiB. That doomed pass was roughly half of a
+        # task measured at 201s, which was 73% of an image rebuild.
+        #
+        # The build file names every source path, so the answer is knowable
+        # before the tool runs: sum what is going in, add a margin for
+        # metadata, and start there. The grow loop stays as the safety net for
+        # when the estimate is short.
         wanted = qnx_parse_size(d.getVar('QNX_ROOTFS_MIN'), 'QNX_ROOTFS_MIN')
+        est = qnx_rootfs_estimate(d, template, extra_raw=(d.getVar('QNX_ROOTFS_EXTRA') or ''))
+        if est > wanted:
+            wanted = est
+            bb.note("rootfs: auto size estimated at %.1f MiB from contents"
+                    % (est / 1024.0 / 1024.0))
     else:
         wanted = qnx_parse_size(requested, 'QNX_ROOTFS_SIZE')
 
