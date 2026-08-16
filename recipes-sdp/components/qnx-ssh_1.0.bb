@@ -110,9 +110,12 @@ QNX_SSH_AUTHORIZED_KEYS_FILE ?= ""
 #     ssh_key=/root/.ssh/id_ed25519      to reach the guests
 #     ota_server_key=/.ssh/id_ed25519    to reach the OTA server
 #
-# and /.ssh is ~/.ssh there: qnx-base.build.inc sets HOME=/ in /etc/profile,
-# even though /etc/passwd gives root /root. Whichever of the two hms happens to
-# use, the key is at the end of it.
+# Both work because of the SYMLINK, not because of HOME. Measured on the board,
+# HOME is / for interactive and non-interactive shells alike and /etc/passwd
+# gives root /root -- but do not lean on that; the link is what makes both
+# paths resolve whatever HOME happens to be. (/etc/profile does set HOME=/, and
+# for a long time nothing read it: ENV was set nowhere, so the file was inert.)
+# The old comment here explained it via /etc/profile alone, which was wrong.
 QNX_SSH_IDENTITY_DEST ?= "/root/.ssh/id_ed25519"
 QNX_SSH_IDENTITY_LINKS ?= ""
 

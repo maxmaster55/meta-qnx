@@ -100,9 +100,25 @@ Two paths on the host because `hms.conf` asks for the key by two names:
 | `ssh_key=/root/.ssh/id_ed25519` | reaching the guests |
 | `ota_server_key=/.ssh/id_ed25519` | reaching the OTA server |
 
-`/.ssh` is `~/.ssh` there: `qnx-base.build.inc` sets `HOME=/` in `/etc/profile`,
-even though `/etc/passwd` gives root `/home/root`. It is one key installed once
-and linked, not two files — two copies of a key can drift apart.
+`/.ssh` is `~/.ssh` there, and it is one key installed once and linked, not two
+files — two copies of a key can drift apart.
+
+Measured on the board rather than assumed, because the explanation that used to
+be here was wrong twice over. It claimed `/etc/passwd` gives root `/home/root`
+(it gives `/root`) and that `HOME=/` comes from `/etc/profile` (which, when that
+was written, nothing read — `ENV` was set nowhere, so the file was inert). What
+is actually true:
+
+```
+$ grep ^root: /etc/passwd | cut -d: -f6      ->  /root
+$ sh -c 'echo $HOME'                          ->  /       (non-interactive)
+$ ksh -i -c 'echo $HOME'                      ->  /       (interactive)
+$ ls -l /.ssh/id_ed25519                      ->  -> /root/.ssh/id_ed25519
+```
+
+`HOME` is `/` for both kinds of shell, so `~/.ssh` resolves to `/.ssh` whoever
+asks. But do not lean on that: the reason both of `hms.conf`'s paths work is
+the **symlink**, which is there whatever `HOME` happens to be.
 
 ### The variables
 
