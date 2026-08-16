@@ -11,7 +11,9 @@
   bitbake makes the `HOSTTOOLS` symlinks at startup — so a missing one fails immediately,
   even if no recipe uses it.
 - **Optional host tools:** `java` (only for the CommonAPI code generators), `bmaptool`
-  (faster flashing — a block map is written beside each disk image when present),
+  (a block map is written beside each disk image when present; it covers the whole
+  image deliberately — see
+  [the cookbook](cookbook.md#the-block-map-must-cover-the-whole-image)),
   `patchelf` (used by the GPU-stack dependency script). All three are `HOSTTOOLS_NONFATAL`:
   absent just means the corresponding feature is skipped.
 

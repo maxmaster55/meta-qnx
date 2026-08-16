@@ -552,6 +552,30 @@ Check it before flashing:
 fdisk -l my.img      # bootable FAT32 partition + type-179 QNX6 partition
 ```
 
+### The block map must cover the whole image
+
+`bmaptool copy` writes the ranges the `.bmap` lists and leaves the rest of the card
+alone — it does not zero it. Flash onto a card that already holds an image and every
+unmapped range keeps the *previous* flash's bytes.
+
+For most Yocto images that is harmless, because the unmapped ranges are free
+filesystem space. It is not harmless here: a disk image built by `qnx-disk` embeds an
+IFS, and an IFS contains runs of zero padding. A map that omits those runs produces a
+card whose IFS is the right size and spliced together from two builds. It fails to boot
+in a way that looks exactly like having flashed an old image.
+
+So `qnx-disk` builds the map **before** the image is made sparse — one range, 100%
+coverage — and punches the holes afterwards. The image on disk is still about 1.2 GB
+instead of 12 GB, and a flash still writes every byte. `MappedBlocksCount` in the
+`.bmap` should equal `BlocksCount`:
+
+```bash
+grep -oE "<(Mapped)?BlocksCount> [0-9]+" tmp/deploy/images/qnx-aarch64le/my.img.bmap
+```
+
+If those two numbers differ, do not use that map — flash with `dd`, or with
+`bmaptool copy --nobmap`, both of which write the file in full.
+
 ## A data disk for payloads too big for an IFS
 
 An IFS is copied into RAM whole at boot, so a large runtime — Qt, a graphics stack —
