@@ -185,6 +185,7 @@ addtask dumpbuild after do_generate_diskfiles
 
 python do_compile() {
     import os
+    import subprocess
     import shutil
 
     b = d.getVar('B')
@@ -203,8 +204,56 @@ python do_compile() {
             bb.fatal("QNX_DISK_DATA_IMG points at %s, which does not exist. "
                      "Add a do_compile[depends] on the rootfs recipe's do_deploy."
                      % data_img)
-        shutil.copy2(data_img, os.path.join(b, 'part-data.img'))
+        # cp --sparse=always, not shutil.copy2.
+        #
+        # mkqnx6fsimg already produces a sparse image -- an 8G guest rootfs
+        # occupies about 485M on disk -- and copy2 materialises every hole,
+        # turning that into a real 8G write here and another one in do_install
+        # and a third in do_deploy. Preserving the holes is the difference
+        # between a build that writes half a gigabyte and one that writes
+        # fourteen, for byte-identical output.
+        # Hardlink first: diskimage only reads part-data.img, and this is the
+        # same filesystem, so copying 4.4 GB to produce an identical file was
+        # 50s of pure I/O per build. Falls back to a sparse copy across
+        # filesystems.
+        part = os.path.join(b, 'part-data.img')
+        if os.path.exists(part):
+            os.unlink(part)
+        try:
+            os.link(data_img, part)
+        except OSError:
+            subprocess.run(['cp', '--sparse=always', data_img, part], check=True)
 }
+
+# ---------------------------------------------------------------------------
+# Don't put the disk image in sstate
+# ---------------------------------------------------------------------------
+# A disk image is an output, not a shared build artifact. Nothing ever consumes
+# it as an input to another recipe, so caching it buys one thing only -- not
+# re-running diskimage -- and charges for it on every build that does run.
+#
+# Measured here: the qnx-host-disk sstate object is 780 MB and takes ~23s to
+# compress, and the cache had several of them side by side, one per hash. That
+# is a per-build tax proportional to the image size, which is exactly the thing
+# that made a bigger guest rootfs hurt.
+#
+# poky does the same for the SDK, for the same reason:
+#     SSTATE_SKIP_CREATION:task-populate-sdk = '1'
+#
+# The task still runs and still deploys; it just is not packaged afterwards.
+SSTATE_SKIP_CREATION:task-deploy = "1"
+
+# ---------------------------------------------------------------------------
+# bmap
+# ---------------------------------------------------------------------------
+# bmaptool create reads the entire image to find its holes -- ~22s on a 2.5 GB
+# disk -- and the result is only useful when flashing with bmaptool. Worth it
+# for a release, pure overhead on the twentieth rebuild of the day.
+QNX_DISK_BMAP ?= "0"
+
+# Ship part-boot.img / part-data.img alongside the disk. Off: they are
+# intermediates and part-data.img duplicates qnx-host-data.img.
+QNX_DISK_DEPLOY_PARTS ?= "0"
 
 python do_generate_diskcfg() {
     import os
@@ -248,18 +297,56 @@ addtask generate_diskcfg after do_compile before do_install
 do_install() {
 	cd ${B}
 	diskimage -o ${B}/${QNX_DISK_NAME}.img -c ${B}/disk.cfg
+
+	# diskimage writes every byte, holes included, so the assembled image
+	# lands fully allocated however sparse its inputs were. Punching the
+	# zero ranges back out costs one pass and changes no content -- the file
+	# reads back identically, it just stops occupying the zeros.
+	if command -v fallocate >/dev/null 2>&1; then
+		before=$(du -m ${B}/${QNX_DISK_NAME}.img | cut -f1)
+		fallocate --dig-holes ${B}/${QNX_DISK_NAME}.img 2>/dev/null || true
+		after=$(du -m ${B}/${QNX_DISK_NAME}.img | cut -f1)
+		bbnote "disk image: ${before} MiB -> ${after} MiB on disk (same content, holes punched)"
+	fi
 }
 
 do_deploy() {
 	install -d ${DEPLOYDIR}
-	install -m 0644 ${B}/${QNX_DISK_NAME}.img ${DEPLOYDIR}/
 
-	for f in ${B}/part-*.img ${B}/boot.build ${B}/disk.cfg; do
+	# Hardlink, do not copy.
+	#
+	# ${B} and ${DEPLOYDIR} are both under tmp/, so this is a directory entry
+	# rather than 2.5 GB of I/O. Measured: this task took 119s copying, which
+	# was the single largest cost in the whole image build -- larger than
+	# actually assembling the disk.
+	#
+	# Safe because nothing rewrites the image in place after do_install; the
+	# next build replaces the file rather than editing it. cp falls back to a
+	# sparse copy if the link cannot be made (different filesystem).
+	ln -f ${B}/${QNX_DISK_NAME}.img ${DEPLOYDIR}/${QNX_DISK_NAME}.img 2>/dev/null || \
+		cp --sparse=always ${B}/${QNX_DISK_NAME}.img ${DEPLOYDIR}/
+	chmod 0644 ${DEPLOYDIR}/${QNX_DISK_NAME}.img
+
+	# The small text artifacts are always worth having.
+	for f in ${B}/boot.build ${B}/disk.cfg; do
 		[ -e "$f" ] || continue
 		install -m 0644 "$f" ${DEPLOYDIR}/
 	done
 
-	if command -v bmaptool >/dev/null 2>&1; then
+	# part-*.img are build intermediates, and part-data.img is a byte-for-byte
+	# duplicate of qnx-host-data.img which its own recipe already deploys. They
+	# were costing a gigabyte of copying per build to ship a second copy of
+	# something already there. Set QNX_DISK_DEPLOY_PARTS = "1" to get them back
+	# for debugging a partition layout.
+	if [ "${QNX_DISK_DEPLOY_PARTS}" = "1" ]; then
+		for f in ${B}/part-*.img; do
+			[ -e "$f" ] || continue
+			ln -f "$f" ${DEPLOYDIR}/$(basename "$f") 2>/dev/null || \
+				cp --sparse=always "$f" ${DEPLOYDIR}/
+		done
+	fi
+
+	if [ "${QNX_DISK_BMAP}" = "1" ] && command -v bmaptool >/dev/null 2>&1; then
 		if ! bmaptool create -o ${DEPLOYDIR}/${QNX_DISK_NAME}.img.bmap \
 				${B}/${QNX_DISK_NAME}.img; then
 			bbwarn "bmaptool failed; the image is still usable, flashing it will just be slower"

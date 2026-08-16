@@ -133,9 +133,19 @@ python do_compile() {
 
 do_install[noexec] = "1"
 
+# Same reasoning as qnx-disk.bbclass: a filesystem image is an output, and
+# packaging one into sstate costs a compress of the whole thing on every build.
+# qnx-host-data's object measured 369 MB. The task still runs and deploys.
+SSTATE_SKIP_CREATION:task-deploy = "1"
+
 do_deploy() {
 	install -d ${DEPLOYDIR}
-	install -m 0644 ${QNX_ROOTFS_IMG} ${DEPLOYDIR}/${QNX_ROOTFS_NAME}.img
+	# Hardlink rather than copy -- same filesystem, and this task measured 43s
+	# copying an image that already exists two directories away. cp --sparse
+	# is the fallback for a deploy dir on another filesystem.
+	ln -f ${QNX_ROOTFS_IMG} ${DEPLOYDIR}/${QNX_ROOTFS_NAME}.img 2>/dev/null || \
+		cp --sparse=always ${QNX_ROOTFS_IMG} ${DEPLOYDIR}/${QNX_ROOTFS_NAME}.img
+	chmod 0644 ${DEPLOYDIR}/${QNX_ROOTFS_NAME}.img
 
 	# The generated build file is deployed too: when the image is wrong, this is
 	# what says what went into it.
