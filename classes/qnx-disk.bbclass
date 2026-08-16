@@ -246,10 +246,18 @@ SSTATE_SKIP_CREATION:task-deploy = "1"
 # ---------------------------------------------------------------------------
 # bmap
 # ---------------------------------------------------------------------------
-# bmaptool create reads the entire image to find its holes -- ~22s on a 2.5 GB
-# disk -- and the result is only useful when flashing with bmaptool. Worth it
-# for a release, pure overhead on the twentieth rebuild of the day.
-QNX_DISK_BMAP ?= "0"
+# bmaptool create reads the entire image to find its holes, ~20s on this disk.
+#
+# On by default, and it was briefly off, which was a bad trade. The image is
+# sparse now -- 2.2 GB apparent, 1.2 GB real -- and a bmap is what lets
+# `bmaptool copy` skip the holes instead of writing a gigabyte of zeros to an
+# SD card. Twenty seconds of build buys far more than that back on every flash,
+# and without the file the flash fails outright:
+#
+#     bmaptool: ERROR: bmap file not found, please, use --nobmap option
+#
+# Set to "0" if you flash with dd and want the twenty seconds.
+QNX_DISK_BMAP ?= "1"
 
 # Ship part-boot.img / part-data.img alongside the disk. Off: they are
 # intermediates and part-data.img duplicates qnx-host-data.img.

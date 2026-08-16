@@ -54,6 +54,14 @@ QNX_ROOTFS_OE_SYSROOT ?= "${RECIPE_SYSROOT}"
 # told it does not fit, not to silently get more.
 QNX_ROOTFS_SIZE ?= "auto"
 QNX_ROOTFS_MIN ?= "256M"
+
+# Free space to leave in an "auto" sized image for things created at RUNTIME.
+#
+# The estimate only sees what the build puts in, so without this "auto" fits
+# the contents exactly and the board has nowhere to write. Costs nothing in the
+# build -- the image is sparse, so declared size is not written -- and nothing
+# on the card until it is used.
+QNX_ROOTFS_RESERVE ?= "0"
 QNX_ROOTFS_GROW_ATTEMPTS ?= "6"
 QNX_ROOTFS_GROW_FACTOR ?= "1.5"
 
@@ -138,6 +146,10 @@ python do_generate_rootfs_buildfile() {
         # when the estimate is short.
         wanted = qnx_parse_size(d.getVar('QNX_ROOTFS_MIN'), 'QNX_ROOTFS_MIN')
         est = qnx_rootfs_estimate(d, template, extra_raw=(d.getVar('QNX_ROOTFS_EXTRA') or ''))
+        # Room for files created on the TARGET, which no estimate of the build
+        # inputs can see. Without it "auto" produces a filesystem with no free
+        # space, and anything the board tries to write fails with ENOSPC.
+        est += qnx_parse_size(d.getVar('QNX_ROOTFS_RESERVE') or '0', 'QNX_ROOTFS_RESERVE')
         if est > wanted:
             wanted = est
             bb.note("rootfs: auto size estimated at %.1f MiB from contents"
@@ -164,7 +176,8 @@ python do_generate_rootfs_buildfile() {
 }
 addtask generate_rootfs_buildfile after do_configure before do_compile
 do_generate_rootfs_buildfile[vardeps] += "QNX_ROOTFS_INSTALL QNX_ROOTFS_SIZE \
-    QNX_ROOTFS_MIN QNX_ROOTFS_EXTRA QNX_ROOTFS_INODES QNX_ROOTFS_BLKSIZE"
+    QNX_ROOTFS_MIN QNX_ROOTFS_RESERVE QNX_ROOTFS_EXTRA QNX_ROOTFS_INODES \
+    QNX_ROOTFS_BLKSIZE"
 do_generate_rootfs_buildfile[file-checksums] += "${@qnx_template_include_checksums(d)}"
 
 # The generated build file, for `bitbake -c dumpbuild <image>` (qnx-sdp). This
