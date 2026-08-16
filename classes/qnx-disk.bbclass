@@ -204,7 +204,7 @@ python do_compile() {
             bb.fatal("QNX_DISK_DATA_IMG points at %s, which does not exist. "
                      "Add a do_compile[depends] on the rootfs recipe's do_deploy."
                      % data_img)
-        # cp --sparse=always, not shutil.copy2.
+        # cp --sparse=never, not shutil.copy2.
         #
         # mkqnx6fsimg already produces a sparse image -- an 8G guest rootfs
         # occupies about 485M on disk -- and copy2 materialises every hole,
@@ -246,17 +246,23 @@ SSTATE_SKIP_CREATION:task-deploy = "1"
 # ---------------------------------------------------------------------------
 # bmap
 # ---------------------------------------------------------------------------
-# bmaptool create reads the entire image to find its holes, ~20s on this disk.
+# bmaptool create reads the entire image, ~20s on this disk.
 #
-# On by default, and it was briefly off, which was a bad trade. The image is
-# sparse now -- 2.2 GB apparent, 1.2 GB real -- and a bmap is what lets
-# `bmaptool copy` skip the holes instead of writing a gigabyte of zeros to an
-# SD card. Twenty seconds of build buys far more than that back on every flash,
-# and without the file the flash fails outright:
+# On by default, because without the file `bmaptool copy` fails outright:
 #
 #     bmaptool: ERROR: bmap file not found, please, use --nobmap option
 #
-# Set to "0" if you flash with dd and want the twenty seconds.
+# Note what the map is for here, because it is not what it usually is. do_deploy
+# builds it before the image goes sparse, so it covers the whole file and a
+# flash writes every byte. It buys no flashing time at all -- it exists so that
+# `bmaptool copy` keeps working, and so that the map can never disagree with
+# the image about which bytes matter.
+#
+# Skipping holes is not safe for this image. Its zeros are not all free space:
+# some are padding inside the guest IFS, and a flash that skips those leaves
+# whatever the card held before, which boots as far as a corrupt IFS gets.
+#
+# Set to "0" if you flash with dd and want the twenty seconds back.
 QNX_DISK_BMAP ?= "1"
 
 # Ship part-boot.img / part-data.img alongside the disk. Off: they are
@@ -306,16 +312,21 @@ do_install() {
 	cd ${B}
 	diskimage -o ${B}/${QNX_DISK_NAME}.img -c ${B}/disk.cfg
 
-	# diskimage writes every byte, holes included, so the assembled image
-	# lands fully allocated however sparse its inputs were. Punching the
-	# zero ranges back out costs one pass and changes no content -- the file
-	# reads back identically, it just stops occupying the zeros.
-	if command -v fallocate >/dev/null 2>&1; then
-		before=$(du -m ${B}/${QNX_DISK_NAME}.img | cut -f1)
-		fallocate --dig-holes ${B}/${QNX_DISK_NAME}.img 2>/dev/null || true
-		after=$(du -m ${B}/${QNX_DISK_NAME}.img | cut -f1)
-		bbnote "disk image: ${before} MiB -> ${after} MiB on disk (same content, holes punched)"
-	fi
+	# Do NOT punch the zero ranges out of this file.
+	#
+	# `fallocate --dig-holes` was here, to stop the image occupying its own
+	# zeros. It reclaimed 10.7 GB and it produced cards that would not boot.
+	#
+	# dig-holes punches *any* aligned run of zeros, and it cannot tell free
+	# filesystem space from zero padding inside a file. It put 15 holes inside
+	# the embedded guest IFS alone. bmaptool then skips every hole -- it writes
+	# only mapped ranges and never zeroes the rest -- so flashing onto a card
+	# that already held an image left the previous card's bytes in all 15 gaps.
+	# The result is an IFS of the right size, spliced from two builds, that
+	# fails to boot in a way that looks exactly like a stale image.
+	#
+	# The image is a filesystem, so its zeros are content. Keep it allocated
+	# and let the bmap in do_deploy describe the whole thing.
 }
 
 do_deploy() {
@@ -332,7 +343,7 @@ do_deploy() {
 	# next build replaces the file rather than editing it. cp falls back to a
 	# sparse copy if the link cannot be made (different filesystem).
 	ln -f ${B}/${QNX_DISK_NAME}.img ${DEPLOYDIR}/${QNX_DISK_NAME}.img 2>/dev/null || \
-		cp --sparse=always ${B}/${QNX_DISK_NAME}.img ${DEPLOYDIR}/
+		cp --sparse=never ${B}/${QNX_DISK_NAME}.img ${DEPLOYDIR}/
 	chmod 0644 ${DEPLOYDIR}/${QNX_DISK_NAME}.img
 
 	# The small text artifacts are always worth having.
@@ -350,10 +361,25 @@ do_deploy() {
 		for f in ${B}/part-*.img; do
 			[ -e "$f" ] || continue
 			ln -f "$f" ${DEPLOYDIR}/$(basename "$f") 2>/dev/null || \
-				cp --sparse=always "$f" ${DEPLOYDIR}/
+				cp --sparse=never "$f" ${DEPLOYDIR}/
 		done
 	fi
 
+	# Map first, punch holes second. The order is the whole point.
+	#
+	# bmaptool create records which byte ranges to write; bmaptool copy then
+	# reads those ranges out of the image and writes them. Ranges the map does
+	# not list are never touched on the destination -- not written, not zeroed.
+	#
+	# So build the map while the image is still fully allocated and it covers
+	# 100% of the file. Only then punch the zeros out. The file on disk drops
+	# from 12 GB to about 1.2 GB, the content is unchanged (a hole reads back
+	# as zeros), and the map still says "write all of it" -- so a flash writes
+	# every byte, holes included, exactly as dd would.
+	#
+	# Punching first is what broke flashing: the map then omitted 10.7 GB,
+	# including 15 ranges inside the guest IFS, and bmaptool copy left the
+	# previous card's bytes in every one of them.
 	if [ "${QNX_DISK_BMAP}" = "1" ] && command -v bmaptool >/dev/null 2>&1; then
 		if ! bmaptool create -o ${DEPLOYDIR}/${QNX_DISK_NAME}.img.bmap \
 				${B}/${QNX_DISK_NAME}.img; then
@@ -362,6 +388,16 @@ do_deploy() {
 		fi
 	else
 		bbnote "bmaptool not available; skipping block map"
+	fi
+
+	# Now the image may go sparse. Both paths are normally one inode; calling
+	# it twice is harmless if the hardlink fell back to a copy.
+	if command -v fallocate >/dev/null 2>&1; then
+		before=$(du -m ${DEPLOYDIR}/${QNX_DISK_NAME}.img | cut -f1)
+		fallocate --dig-holes ${B}/${QNX_DISK_NAME}.img 2>/dev/null || true
+		fallocate --dig-holes ${DEPLOYDIR}/${QNX_DISK_NAME}.img 2>/dev/null || true
+		after=$(du -m ${DEPLOYDIR}/${QNX_DISK_NAME}.img | cut -f1)
+		bbnote "disk image: ${before} MiB -> ${after} MiB on disk (same content, and the bmap already covers the whole file)"
 	fi
 }
 addtask deploy after do_install before do_build
