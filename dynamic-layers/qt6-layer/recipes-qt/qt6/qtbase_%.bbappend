@@ -27,16 +27,47 @@
 #                 build would have used linuxfb, and the reason linuxfb is not
 #                 in the list above.
 #
-# no-opengl is not optional the moment gui is on. Qt treats OpenGL as required
-# unless told otherwise and fails configure with "The OpenGL functionality tests
-# failed!" -- it does not quietly fall back. Turning it off is also what the
-# hand-written qt6-qnx recipe does (-DINPUT_opengl=no). A board with a GPU
-# overrides this whole variable rather than editing here.
 # PNG is enabled below through EXTRA_OECMAKE rather than here, because
 # PACKAGECONFIG[png] means *system* libpng and there is no system libpng on
 # QNX. See the FEATURE_png block further down.
-QNX_QTBASE_PACKAGECONFIG ?= "gui no-opengl"
+QNX_QTBASE_PACKAGECONFIG ?= "gui"
 PACKAGECONFIG:qnx-aarch64le = "${QNX_QTBASE_PACKAGECONFIG}"
+
+# --- OpenGL ----------------------------------------------------------------
+# An explicit decision is not optional the moment gui is on: Qt treats OpenGL as
+# required unless told otherwise and fails configure with "The OpenGL
+# functionality tests failed!" -- it does not quietly fall back.
+#
+# This is a knob rather than a fixed "no" because whether there is a GL stack is
+# a property of the BOARD, not of QNX. Both answers are real here:
+#
+#   no    Qt Quick then has no RHI backend and the application must run with
+#         QT_QUICK_BACKEND=software. That renders, but the software backend has
+#         no shader support, so QtQuick.Effects (MultiEffect) and every
+#         layer.enabled item silently draw NOTHING -- no warning, no error. A UI
+#         that leans on them comes out looking like a plainer design rather than
+#         a broken one, which is a genuinely hard failure to diagnose.
+#
+#   es2   OpenGL ES 2. Needs libEGL/libGLESv2 and their headers, which SDP 8
+#         ships in target/qnx/aarch64le/usr/lib and usr/include -- Qt finds them
+#         the same way it finds libscreen, so nothing here says where they are.
+#         The board also needs a driver behind them at RUNTIME; the SDP
+#         libraries are a dispatch layer and resolve to nothing on their own.
+#
+# PACKAGECONFIG[gles2] is the wrong lever, for the same reason PACKAGECONFIG[png]
+# is: it carries DEPENDS on virtual/libgles2 and virtual/egl, and there is no
+# Yocto recipe providing either on QNX -- they come from the SDP. So the choice
+# is passed straight to Qt, mirroring what PACKAGECONFIG[no-opengl] did.
+# INPUT_opengl alone is not enough, and the reason is easy to miss. meta-qt6
+# derives -DFEATURE_opengles2=OFF and -DFEATURE_opengl_desktop=OFF from
+# PACKAGECONFIG not containing gles2/opengl, and emits them EARLIER on the same
+# command line. Setting only INPUT_opengl leaves those OFF entries sitting in the
+# cache against it. The FEATURE_ overrides below are appended after them, and
+# for one cmake invocation the last -D on the line is the one that sticks.
+QNX_QTBASE_OPENGL ?= "no"
+QNX_QTBASE_OPENGL_CMAKE = "-DINPUT_opengl=${QNX_QTBASE_OPENGL}"
+QNX_QTBASE_OPENGL_CMAKE:append = "${@' -DFEATURE_opengles2=ON -DFEATURE_egl=ON' if d.getVar('QNX_QTBASE_OPENGL') == 'es2' else ''}"
+EXTRA_OECMAKE:append:qnx-aarch64le = " ${QNX_QTBASE_OPENGL_CMAKE}"
 
 # --- features Qt gets wrong for QNX ----------------------------------------
 # libresolv: Qt's DNS lookup wants glibc's resolver entry points
