@@ -74,9 +74,19 @@ QNX_SSH_KEYDIR_WAIT ?= "60"
 # Both are empty by default: an image says what it wants.
 #
 #   QNX_SSH_AUTHORIZED_KEYS   public key lines, one per key, that may log in as
-#                             root. Written to /root/.ssh/authorized_keys. A
-#                             public key is not a secret, so these are literals
-#                             an image or a layer can state outright.
+#                             root. Baked into the IFS at /root/.ssh/authorized_keys
+#                             as a SEED only -- sshd does not read that copy. It is
+#                             read-only and RAM-resident, which is fine for the keys
+#                             this build already knows about but defeats the whole
+#                             point of ssh-copy-id: it appends over ssh, and nothing
+#                             appended to a read-only file survives, let alone a
+#                             reboot. ssh-server.sh copies this seed once onto the
+#                             data partition (QNX_SSH_KEYDIR/authorized_keys) if
+#                             nothing is there yet; AuthorizedKeysFile below points
+#                             sshd at that copy, not this one, so anything appended
+#                             from any machine afterwards sticks. A public key is not
+#                             a secret, so these are literals an image or a layer can
+#                             state outright.
 #
 #   QNX_SSH_IDENTITY          path on the BUILD HOST to a private key, installed
 #                             as /root/.ssh/id_ed25519 at 0600. This one is a
@@ -198,6 +208,21 @@ do_install[vardeps] += "QNX_SSH_KEYDIR QNX_SSH_KEYDIR_WAIT"
 # StrictHostKeyChecking back on rather than passing =no everywhere, as hms
 # currently has to.
 #
+# sshd_config's AuthorizedKeysFile is the same move for INBOUND logins. The
+# default (.ssh/authorized_keys, resolved against /root from passwd) is the
+# IFS-baked file above -- read-only, so ssh-copy-id from a fresh machine can
+# never add itself. Pointed at QNX_SSH_KEYDIR instead, which persists.
+#
+# ssh-copy-id itself does not consult this file or sshd_config at all: it
+# appends to ~/.ssh/authorized_keys over the connection it just made, and on
+# this board HOME=/ for both interactive and non-interactive shells (see
+# meta-qnx/docs/ssh.md), so that is literally /.ssh/authorized_keys -- a
+# different path from /root/.ssh, and also inside the read-only IFS. The
+# [type=link] entry below is what makes THAT path land in the same writable
+# file sshd is now reading, the same trick already used for /.ssh/id_ed25519
+# on the host image: the symlink itself can sit in read-only storage, because
+# opening through it only needs the TARGET's directory to be writable.
+#
 # ${...} rather than an @MARKER@: this is expanded by bitbake in THIS recipe's
 # context. The fragment expander resolves markers against the image's datastore,
 # where QNX_SSH_KEYDIR is not set.
@@ -224,9 +249,10 @@ UsePAM yes\n\
 PasswordAuthentication yes\n\
 KbdInteractiveAuthentication yes\n\
 SetEnv ENV=/etc/profile\n\
-AuthorizedKeysFile      .ssh/authorized_keys\n\
+AuthorizedKeysFile      ${QNX_SSH_KEYDIR}/authorized_keys\n\
 Subsystem       sftp    /usr/libexec/sftp-server\n\
 }\n\
+[type=link] /.ssh/authorized_keys = ${QNX_SSH_KEYDIR}/authorized_keys\n\
 [perms=0744] /proc/boot/.ssh-server.sh=@QNX_IFS_SYSROOT@${QNX_SSH_STAGE}/ssh-server.sh\
 "
 

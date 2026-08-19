@@ -124,7 +124,7 @@ the **symlink**, which is there whatever `HOME` happens to be.
 
 | Variable | Where | What |
 | --- | --- | --- |
-| `QNX_SSH_AUTHORIZED_KEYS` | image | public key lines; written to `/root/.ssh/authorized_keys` |
+| `QNX_SSH_AUTHORIZED_KEYS` | image | public key lines; baked into the IFS as a SEED only -- see [§3a](#3a-why-authorized_keys-had-to-move-too) |
 | `QNX_SSH_IDENTITY` | `local.conf` | **path on the build host** to a private key |
 | `QNX_SSH_IDENTITY_DEST` | image | where it lands (default `/root/.ssh/id_ed25519`) |
 | `QNX_SSH_IDENTITY_LINKS` | image | other paths the same key must answer at |
@@ -195,6 +195,52 @@ string appears in exactly one file. Most likely a key made by hand so a person
 could log in without a password, which would explain why guest-1 has it and
 guest-2 does not. If it belongs to nobody, deleting it is better than keeping it
 out of caution.
+
+### 3a. Why authorized_keys had to move too
+
+The point of `QNX_SSH_AUTHORIZED_KEYS` was never to be the only way in forever
+— an operator running `ssh-copy-id` from their own machine should just work,
+the same as on any other box. It did not:
+
+```
+$ ssh-copy-id root@10.0.0.2
+... key added, but every subsequent login still asks for a password
+```
+
+`ssh-copy-id` does not talk to sshd or read `sshd_config`. It connects, then
+appends to `~/.ssh/authorized_keys` over that connection. Two things had to
+both be true for that append to actually take effect, and neither was:
+
+1. **`sshd` was reading a different file than the one being appended to.**
+   `AuthorizedKeysFile` defaulted to `.ssh/authorized_keys`, resolved against
+   `/root` (from `/etc/passwd`, not `$HOME`) — i.e. `/root/.ssh/authorized_keys`,
+   the file `QNX_SSH_AUTHORIZED_KEYS` bakes into the IFS. Now points at
+   `${QNX_SSH_KEYDIR}/authorized_keys` on the data partition instead — the same
+   directory the host keys and `known_hosts` already live in, for the same
+   reason: `/root/.ssh` is read-only and RAM-resident, so nothing appended
+   there was ever going to survive a reboot, or even the append itself.
+
+2. **The path `ssh-copy-id` actually writes to was inside the read-only IFS as
+   well.** `HOME` is `/` here (§3, above), so `~/.ssh/authorized_keys` is
+   `/.ssh/authorized_keys` — not `/root/.ssh/authorized_keys`, a different path
+   entirely, and one nothing used to touch. `qnx-ssh` now ships
+   `[type=link] /.ssh/authorized_keys = ${QNX_SSH_KEYDIR}/authorized_keys`, the
+   same trick already used for `/.ssh/id_ed25519` on the host: the symlink
+   itself is baked into the read-only IFS, but opening *through* it for append
+   only needs the **target's** directory to be writable, which `/var/ssh` is.
+
+`QNX_SSH_AUTHORIZED_KEYS` still does exactly what it did — it is what a freshly
+flashed board can be reached with at all, before anyone has run `ssh-copy-id`
+against it. `ssh-server.sh` copies that seed onto the data partition once, the
+same "generate/seed only if not already there" idiom as the host keys just
+above it, and from then on the data-partition copy is what's authoritative:
+whatever gets appended to it — by `ssh-copy-id`, from any machine, at any point
+after first boot — persists, because sshd is reading that copy and nothing ever
+overwrites it again.
+
+Guest-2 (Linux, dropbear) is not this component and is not affected by any of
+this — see "The Linux guest is different" above. `ssh-copy-id` against it still
+depends on whatever `hms-ssh-key` in `meta-bmo` already does.
 
 ## 4. Pre-accepted guest keys
 

@@ -1,7 +1,7 @@
 #!/bin/ksh
 #
-# Wait for somewhere persistent to keep the host keys, generate them if they are
-# not already there, then start sshd.
+# Wait for somewhere persistent to keep the host keys and authorized_keys,
+# seed both if they are not already there, then start sshd.
 #
 # The keys are made on the board rather than shipped in the image: a key baked
 # into an image is the same key on every board written from it, which makes the
@@ -58,6 +58,19 @@ do
         ssh-keygen -q -t $t -N "" -f $KEYDIR/ssh_host_${t}_key
     fi
 done
+
+# Same "if it's not already there" idiom, for authorized_keys rather than the
+# host identity: seed it from the image's baked-in copy once, then leave it
+# alone. sshd_config points AuthorizedKeysFile at $KEYDIR/authorized_keys, not
+# at /root/.ssh -- so after this first copy, whatever gets appended here
+# (ssh-copy-id, by hand, from any machine) is what sshd actually reads, and it
+# survives a reboot same as the host keys above.
+if [ ! -f $KEYDIR/authorized_keys ] && [ -f /root/.ssh/authorized_keys ]
+then
+    echo "sshd: seeding $KEYDIR/authorized_keys from the image"
+    cp /root/.ssh/authorized_keys $KEYDIR/authorized_keys
+    chmod 0600 $KEYDIR/authorized_keys
+fi
 
 # -h rather than HostKey lines in sshd_config, so that where the keys live and
 # where the configuration lives stay independent. sshd_config is still read
